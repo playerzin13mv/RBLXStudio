@@ -55,7 +55,7 @@ object Lua {
 
     private val signals = setOf(
         "Touched", "MouseButton1Click", "Activated", "Heartbeat", "RenderStepped", "Stepped",
-        "PlayerAdded", "Chatted", "Died", "CharacterAdded"
+        "PlayerAdded", "Chatted", "Died", "CharacterAdded", "InputBegan", "InputEnded", "TouchTap"
     )
     private val strKeys = setOf("Text", "Image", "SoundId", "MeshId", "TextureID", "Source", "PlaceholderText")
 
@@ -160,12 +160,69 @@ delay = function(t, f) task.delay(t, f) end
 function time() return __time() end
 function tick() return __time() end
 os = {time = function() return __time() end, clock = function() return __time() end}
+local function newSignal()
+  local s = {fns = {}}
+  function s:Connect(f)
+    local me = self
+    me.fns[#me.fns + 1] = f
+    return {Connected = true, Disconnect = function()
+      for i, v in ipairs(me.fns) do
+        if v == f then table.remove(me.fns, i) break end
+      end
+    end}
+  end
+  s.connect = s.Connect
+  function s:Fire(...)
+    for _, f in ipairs(self.fns) do __spawn(f, ...) end
+  end
+  return s
+end
+Signal = {new = newSignal}
+
+CFrame = {}
+CFrame.__index = CFrame
+function CFrame.new(x, y, z)
+  local p
+  if type(x) == "table" then p = x else p = Vector3.new(x or 0, y or 0, z or 0) end
+  return setmetatable({Position = p, p = p, X = p.X, Y = p.Y, Z = p.Z}, CFrame)
+end
+CFrame.__mul = function(a, b)
+  if getmetatable(b) == CFrame then return CFrame.new(a.Position + b.Position) end
+  return a.Position + b
+end
+CFrame.Angles = function() return CFrame.new(0, 0, 0) end
+
+Enum = setmetatable({}, {__index = function(t, k)
+  local sub = setmetatable({}, {__index = function(_, n) return n end})
+  rawset(t, k, sub)
+  return sub
+end})
+
+Mouse = {X = 0, Y = 0, Target = nil, Hit = CFrame.new(0, 0, 0), Icon = "",
+  Button1Down = newSignal(), Button1Up = newSignal(), Move = newSignal()}
+function __mouseTap(x, y, hx, hy, hz, target)
+  Mouse.X = x; Mouse.Y = y; Mouse.Hit = CFrame.new(hx, hy, hz); Mouse.Target = target
+  local input = {UserInputType = "Touch", UserInputState = "Begin", KeyCode = "Unknown", Position = Vector2.new(x, y)}
+  __fireUIS("InputBegan", input)
+  Mouse.Button1Down:Fire()
+  __fireUIS("InputEnded", input)
+  Mouse.Button1Up:Fire()
+end
+
+function __debris(p, t)
+  task.delay(t or 5, function() if p then p:Destroy() end end)
+end
+
+math.clamp = function(v, a, b) return math.max(a, math.min(b, v)) end
+math.round = function(x) return math.floor(x + 0.5) end
+math.sign = function(x) if x > 0 then return 1 elseif x < 0 then return -1 else return 0 end end
 function typeof(v)
   local m = getmetatable(v)
   if m == Vector3 then return "Vector3" end
   if m == Color3 then return "Color3" end
   if m == UDim2 then return "UDim2" end
   if m == Vector2 then return "Vector2" end
+  if m == CFrame then return "CFrame" end
   if type(v) == "userdata" then return "Instance" end
   return type(v)
 end
@@ -208,6 +265,14 @@ end
 
     private fun vec3(x: Float, y: Float, z: Float): LuaValue =
         g!!.get("Vector3").get("new").call(nv(x), nv(y), nv(z))
+
+    private fun cframe(x: Float, y: Float, z: Float): LuaValue =
+        g!!.get("CFrame").get("new").call(nv(x), nv(y), nv(z))
+
+    private fun posOf(v: LuaValue): FloatArray {
+        val p = if (v.istable() && v.get("Position").istable()) v.get("Position") else v
+        return f3(p)
+    }
 
     private fun color3(r: Float, gg: Float, b: Float): LuaValue =
         g!!.get("Color3").get("new").call(nv(r), nv(gg), nv(b))
@@ -291,6 +356,33 @@ end
         fire(h, "Died")
     }
 
+    // toque curto na tela durante o Play: vira Mouse.Button1Down / UserInputService.InputBegan
+    fun mouseTap(px: Float, py: Float) {
+        if (!live) return
+        val ray = Cam.ray(px, py)
+        var bt = Float.MAX_VALUE
+        var tp: PartData? = null
+        for (p in Scene.parts) {
+            val t = rayObb(ray[0], ray[1], v3(p.x, p.y, p.z), p.rot, floatArrayOf(p.sx / 2, p.sy / 2, p.sz / 2))
+            if (t >= 0f && t < bt) { bt = t; tp = p }
+        }
+        if (tp == null) bt = if (ray[1][1] < -0.01f) -ray[0][1] / ray[1][1] else 500f
+        val hx = ray[0][0] + ray[1][0] * bt
+        val hy = ray[0][1] + ray[1][1] * bt
+        val hz = ray[0][2] + ray[1][2] * bt
+        val target = tp
+        post {
+            val gl = g
+            if (gl != null) {
+                try {
+                    gl.get("__mouseTap").invoke(LuaValue.varargsOf(arrayOf<LuaValue>(nv(px), nv(py), nv(hx), nv(hy), nv(hz), wrap(target))))
+                } catch (e: LuaError) {
+                    Out.add(e.message ?: "erro", 2)
+                }
+            }
+        }
+    }
+
     fun post(r: () -> Unit) {
         queue.add(r)
     }
@@ -344,6 +436,8 @@ end
             "Play" -> return fn { Audio.play(i); LuaValue.NONE }
             "Stop", "Pause" -> return fn { Audio.stop(i); LuaValue.NONE }
             "TakeDamage" -> return fn { a -> Play.health -= a.arg(2).tofloat(); LuaValue.NONE }
+            "GetMouse" -> return fn { g!!.get("Mouse") }
+            "AddItem" -> return fn { a -> g!!.get("__debris").call(a.arg(2), a.arg(3)); LuaValue.NONE }
         }
         if (k in signals) return signal(i, k)
 
@@ -359,10 +453,25 @@ end
                     return vec3(o[0], o[1], o[2])
                 }
                 "Velocity", "AssemblyLinearVelocity" -> return vec3(i.vel[0], i.vel[1], i.vel[2])
+                "CFrame" -> return cframe(i.x, i.y, i.z)
             }
         }
-        if (i is CharInst && k == "Position") {
-            return vec3(Play.x, Play.y + (if (i.name == "Head") 2f else 0f), Play.z)
+        if (i is CharInst) {
+            val oy = if (i.name == "Head") 2f else 0f
+            when (k) {
+                "Position" -> return vec3(Play.x, Play.y + oy, Play.z)
+                "CFrame" -> return cframe(Play.x, Play.y + oy, Play.z)
+                "Velocity", "AssemblyLinearVelocity" -> return vec3(0f, Play.vy, 0f)
+            }
+        }
+        if (i.className == "UserInputService") {
+            when (k) {
+                "GetMouseLocation" -> return fn { g!!.get("Vector2").get("new").call(g!!.get("Mouse").get("X"), g!!.get("Mouse").get("Y")) }
+                "IsKeyDown" -> return fn { LuaValue.FALSE }
+                "TouchEnabled" -> return LuaValue.TRUE
+                "MouseEnabled" -> return LuaValue.FALSE
+                "KeyboardEnabled" -> return LuaValue.FALSE
+            }
         }
         if (i.className == "Humanoid") {
             when (k) {
@@ -370,6 +479,10 @@ end
                 "MaxHealth" -> return nv(100f)
                 "WalkSpeed" -> return nv(Play.walkSpeed)
                 "JumpPower" -> return nv(Play.jumpPower)
+                "MoveDirection" -> return vec3(Play.moveDirX, 0f, Play.moveDirZ)
+                "Jump" -> return bv(Play.jump)
+                "Fly", "PlatformStand" -> return bv(Play.flying)
+                "FlySpeed" -> return nv(Play.flySpeed)
             }
         }
         if (i === Scene.players && k == "LocalPlayer") return wrap(Scene.localPlayer)
@@ -419,6 +532,12 @@ end
                     i.asleep = false
                     return
                 }
+                "CFrame" -> {
+                    val a = posOf(v)
+                    i.x = a[0]; i.y = a[1]; i.z = a[2]
+                    i.asleep = false
+                    return
+                }
                 "Size" -> {
                     val a = f3(v)
                     i.sx = a[0]; i.sy = a[1]; i.sz = a[2]
@@ -451,8 +570,23 @@ end
                 }
             }
         }
+        if (i is CharInst) {
+            val oy = if (i.name == "Head") 2f else 0f
+            when (k) {
+                "Position", "CFrame" -> {
+                    val a = posOf(v)
+                    Play.x = a[0]; Play.y = a[1] - oy; Play.z = a[2]
+                    Play.vy = 0f
+                    return
+                }
+                "Velocity", "AssemblyLinearVelocity" -> { Play.vy = f3(v)[1]; return }
+            }
+        }
         if (i.className == "Humanoid") {
             when (k) {
+                "Jump" -> { Play.jumpPulse = v.toboolean(); return }
+                "Fly", "PlatformStand" -> { Play.flying = v.toboolean(); if (!Play.flying) Play.vy = 0f; return }
+                "FlySpeed" -> { Play.flySpeed = v.tofloat(); return }
                 "Health" -> { Play.health = v.tofloat(); return }
                 "WalkSpeed" -> { Play.walkSpeed = v.tofloat(); return }
                 "JumpPower" -> { Play.jumpPower = v.tofloat(); return }
@@ -498,6 +632,7 @@ end
         gl.set("warn", printFn(1))
         gl.set("__err", fn { a -> Out.add(a.arg(1).tojstring(), 2); LuaValue.NONE })
         gl.set("__time", fn { nv(clock) })
+        gl.set("__fireUIS", fn { a -> fire(Scene.service("UserInputService"), a.arg(1).tojstring(), a.arg(2), LuaValue.FALSE); LuaValue.NONE })
         gl.set("game", wrap(Scene.game))
         gl.set("workspace", wrap(Scene.workspace))
         val instT = LuaTable()

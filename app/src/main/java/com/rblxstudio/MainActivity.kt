@@ -514,7 +514,7 @@ class MainActivity : Activity() {
                         lookTravel += hypot(x - lookLX, y - lookLY)
                         if (pinchId == -1) {
                             Cam.yaw -= (x - lookLX) * 0.008f
-                            Cam.pitch = (Cam.pitch + (y - lookLY) * 0.008f).coerceIn(0.05f, 1.5f)
+                            Cam.pitch = (Cam.pitch + (y - lookLY) * 0.008f).coerceIn(-1.3f, 1.5f)
                         }
                         lookLX = x
                         lookLY = y
@@ -525,7 +525,7 @@ class MainActivity : Activity() {
                     val b = e.findPointerIndex(pinchId)
                     if (a >= 0 && b >= 0) {
                         val s = hypot(e.getX(a) - e.getX(b), e.getY(a) - e.getY(b))
-                        if (s > 10f && lastPinch > 10f) Cam.dist = (Cam.dist * lastPinch / s).coerceIn(4f, 80f)
+                        if (s > 10f && lastPinch > 10f) Cam.dist = (Cam.dist * lastPinch / s).coerceIn(0.5f, 80f)
                         lastPinch = s
                     }
                 }
@@ -567,8 +567,9 @@ class MainActivity : Activity() {
             lookId = -1
             Play.lookHeld = false
             val slop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
-            if (Settings.moveMode == Settings.MOVE_TAP && pinchId == -1 && lookTravel < slop * 1.5f && t - lookDownT < 300L) {
-                tapMove(lookLX, lookLY)
+            if (pinchId == -1 && lookTravel < slop * 1.5f && t - lookDownT < 300L) {
+                if (Settings.moveMode == Settings.MOVE_TAP) tapMove(lookLX, lookLY)
+                Lua.mouseTap(lookLX, lookLY)
             }
         }
         if (id == pinchId) pinchId = -1

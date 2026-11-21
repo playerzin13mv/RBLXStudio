@@ -55,7 +55,12 @@ object Play {
     @Volatile var playerName = "Player"
     @Volatile var userId = 1L
 
-    private var vy = 0f
+    @Volatile var vy = 0f
+    @Volatile var jumpPulse = false
+    @Volatile var flying = false     // modo voo (Humanoid.Fly / PlatformStand)
+    @Volatile var flySpeed = 50f
+    @Volatile var moveDirX = 0f
+    @Volatile var moveDirZ = 0f
     private var grounded = false
     private var spawnX = 0f
     private var spawnY = 0f
@@ -107,6 +112,7 @@ object Play {
             frags.clear()
             tapOn = false
             shiftLock = false
+            flying = false
             Cam.shoulder = 0f
             touching.clear()
             pairNow.clear()
@@ -178,6 +184,7 @@ object Play {
     private fun respawn() {
         x = spawnX; y = spawnY; z = spawnZ
         vy = 0f
+        flying = false
         health = 100f
         dead = false
         frags.clear()
@@ -188,6 +195,12 @@ object Play {
     fun respawnNow() {
         synchronized(lock) { if (active && !dead) die() }
     }
+
+    // primeira pessoa: opção do menu ou zoom bem perto (como no Roblox)
+    fun firstPerson(): Boolean = !dead && (Settings.firstPerson || Cam.dist < 1f)
+
+    // posição para onde a câmera olha: cabeça em primeira pessoa, peito na terceira
+    fun camTargetY(): Float = if (firstPerson()) y + 2.0f else y + 1.5f
 
     fun applyShiftLock(on: Boolean) {
         shiftLock = on
@@ -216,6 +229,7 @@ object Play {
     private fun die() {
         if (dead) return
         dead = true
+        if (Cam.dist < 1f) Cam.dist = 10f
         deadT = 0f
         health = 0f
         tapOn = false
@@ -379,11 +393,12 @@ object Play {
             }
         }
         lastPX = x; lastPZ = z
+        moveDirX = mx; moveDirZ = mz
         val len = hypot(mx, mz)
         if (len > 1f) { mx /= len; mz /= len }
         val power = if (len > 1f) 1f else len
         moving = power > 0.1f
-        if (shiftLock) {
+        if (shiftLock || firstPerson()) {
             // Shift Lock: o personagem sempre olha para onde a câmera aponta
             val target = Math.toDegrees(atan2(fx, fz).toDouble()).toFloat()
             var d = target - facing
@@ -407,19 +422,30 @@ object Play {
                 Cam.yaw += dy * minOf(1f, dt * 2.2f * power)
             }
         }
-        if (jump && grounded) vy = jumpPower
-        vy -= GRAVITY * dt
-        if (vy < -300f) vy = -300f
+        if (flying) {
+            // voo: sem gravidade; o botão de pulo sobe, e a câmera inclinada para baixo/cima guia o movimento
+            val b = Cam.basis()[0]
+            val len2 = hypot(moveX, moveY)
+            vy = if (jump) flySpeed else if (len2 > 0.1f) b[1] * flySpeed * moveY.coerceAtLeast(0f) else vy * 0.8f
+            if (Math.abs(vy) < 0.5f) vy = 0f
+            grounded = false
+        } else {
+            if ((jump || jumpPulse) && grounded) vy = jumpPower
+            jumpPulse = false
+            vy -= GRAVITY * dt
+            if (vy < -300f) vy = -300f
+        }
 
         val boxes = solids()
-        move(boxes, 0, mx * walkSpeed * dt)
-        move(boxes, 2, mz * walkSpeed * dt)
+        val spd = if (flying) flySpeed else walkSpeed
+        move(boxes, 0, mx * spd * dt)
+        move(boxes, 2, mz * spd * dt)
         grounded = false
         move(boxes, 1, vy * dt)
         if (y < -300f) respawn()
 
         Cam.target[0] = x
-        Cam.target[1] = y + 1.5f
+        Cam.target[1] = camTargetY()
         Cam.target[2] = z
     }
 

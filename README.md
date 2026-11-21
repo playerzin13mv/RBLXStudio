@@ -9,6 +9,26 @@ Versão do Roblox Studio para celular (Android), feita em Kotlin + OpenGL ES.
 - Ícones vetoriais no lugar dos emojis e ícone do app (logo do Roblox Studio)
 - **Login com conta do Roblox** (OAuth 2.0 + PKCE)
 
+## Novidades da v0.9
+- Avatar: busca os itens por 3 caminhos (avatar v1, v2 e currently-wearing), carrega camisa, calça, camiseta, rosto, cabeça de malha e acessórios (malhas v2, v3 e v4). O aviso depois do login mostra o que foi carregado e o que falhou.
+- Câmera: dá para olhar para cima, pinça para zoom (bem perto vira primeira pessoa) e opção "Primeira pessoa" no menu do jogo.
+- Scripts: Humanoid.Fly / PlatformStand / FlySpeed / Jump / MoveDirection, HumanoidRootPart.Position / CFrame / Velocity, Part.CFrame, CFrame.new, Players.LocalPlayer:GetMouse() (Hit, Target, X, Y, Button1Down), UserInputService.InputBegan / InputEnded, Enum.*, Debris:AddItem, math.clamp / round / sign.
+
+Exemplo (LocalScript):
+```lua
+local player = game.Players.LocalPlayer
+local hum = player.Character.Humanoid
+hum.Fly = true
+hum.FlySpeed = 60
+local mouse = player:GetMouse()
+mouse.Button1Down:Connect(function()
+  local p = Instance.new("Part")
+  p.Position = mouse.Hit.Position + Vector3.new(0, 2, 0)
+  p.Parent = workspace
+  game:GetService("Debris"):AddItem(p, 5)
+end)
+```
+
 ## Novidades da v0.6
 - **Avatar do jogador**: ao entrar com a conta, o personagem usa as cores do corpo, a **camisa, calça e camiseta clássicas** (2D) e os **acessórios 3D** (chapéus, cabelo, rosto, pescoço, ombro, frente, costas, cintura) que a conta está vestindo
 - **Menu de pausa novo** (logo do Roblox ou botão Voltar): Retomar, Reiniciar personagem, Sair, e aba **Configurações**

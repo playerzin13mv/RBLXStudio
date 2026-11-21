@@ -160,11 +160,13 @@ class GameMenu(private val act: Activity) : FrameLayout(act) {
         }
         label("Modo da câmera")
         choice(listOf("Seguir", "Clássica"), Settings.camMode) { Settings.camMode = it }
+        label("Visão")
+        choice(listOf("Terceira pessoa", "Primeira pessoa"), if (Settings.firstPerson) 1 else 0) { Settings.firstPerson = it == 1 }
         label("Movimento")
         choice(listOf("Joystick", "D-Pad", "Tocar p/ mover"), Settings.moveMode) { Settings.moveMode = it }
         val tip = TextView(act)
         tip.text = "Seguir: a câmera gira atrás do personagem. Clássica: você gira a câmera com o dedo. " +
-            "Shift Lock mostra um botão de cadeado ao lado do pulo."
+            "Shift Lock mostra um botão de cadeado ao lado do pulo. Pinça com dois dedos para zoom: bem perto vira primeira pessoa."
         tip.textSize = 11f
         tip.setTextColor(0xFF8A8A8A.toInt())
         tip.setPadding(0, dp(10), 0, 0)

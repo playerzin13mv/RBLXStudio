@@ -327,7 +327,8 @@ object Cam {
 
     fun eye(): FloatArray {
         val f = basis()[0]
-        return v3(target[0] - f[0] * dist, target[1] - f[1] * dist, target[2] - f[2] * dist)
+        val dd = if (Play.active && Play.firstPerson()) 0.05f else dist
+        return v3(target[0] - f[0] * dd, target[1] - f[1] * dd, target[2] - f[2] * dd)
     }
 
     fun ray(px: Float, py: Float): Array<FloatArray> {

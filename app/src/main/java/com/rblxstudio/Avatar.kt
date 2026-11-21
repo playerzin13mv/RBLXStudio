@@ -30,6 +30,8 @@ object Avatar {
     @Volatile var shirt: Bitmap? = null
     @Volatile var pants: Bitmap? = null
     @Volatile var tshirt: Bitmap? = null
+    @Volatile var face: Bitmap? = null
+    @Volatile var layered = 0
     @Volatile var accs: List<Acc> = emptyList()
 
     // sobe a cada mudança; o Renderer reenvia as texturas quando muda
@@ -52,17 +54,58 @@ object Avatar {
     private const val T_TSHIRT = 2
     private const val T_SHIRT = 11
     private const val T_PANTS = 12
+    private const val T_FACE = 18
     private val ACC_TYPES = mapOf(
-        8 to "Hat", 41 to "Hair", 42 to "Face", 43 to "Neck",
+        8 to "Hat", 17 to "Head", 41 to "Hair", 42 to "Face", 43 to "Neck",
         44 to "Shoulder", 45 to "Front", 46 to "Back", 47 to "Waist"
     )
-    private const val MAX_ACCS = 8
+    private const val MAX_ACCS = 14
     private const val MAX_TRIS = 40000
 
     fun clear() {
-        shirt = null; pants = null; tshirt = null; accs = emptyList()
+        shirt = null; pants = null; tshirt = null; face = null; layered = 0; accs = emptyList()
         cols = intArrayOf(0xF5CD30, 0x0D69AC, 0xF5CD30, 0xF5CD30, 0x4B974B, 0x4B974B)
         version++
+    }
+
+    private class Item(val id: Long, val type: Int, val name: String)
+
+    private val typeByName = mapOf(
+        "TShirt" to 2, "Hat" to 8, "Shirt" to 11, "Pants" to 12, "Head" to 17, "Face" to 18,
+        "HairAccessory" to 41, "FaceAccessory" to 42, "NeckAccessory" to 43, "ShoulderAccessory" to 44,
+        "FrontAccessory" to 45, "BackAccessory" to 46, "WaistAccessory" to 47
+    )
+
+    private fun parseItems(arr: org.json.JSONArray?): List<Item> {
+        val out = ArrayList<Item>()
+        if (arr == null) return out
+        for (i in 0 until arr.length()) {
+            val a = arr.getJSONObject(i)
+            val aid = a.optLong("id", 0L)
+            if (aid == 0L) continue
+            val t = a.optJSONObject("assetType")
+            var tid = t?.optInt("id", -1) ?: -1
+            if (tid <= 0) tid = typeByName[t?.optString("name", "") ?: ""] ?: -1
+            out.add(Item(aid, tid, a.optString("name", "Item")))
+        }
+        return out
+    }
+
+    // plano C: lista de IDs vestidos + tipo de cada um pela API da economia
+    private fun wearingFallback(id: String): List<Item> {
+        val out = ArrayList<Item>()
+        val j = JSONObject(Assets.httpGet("https://avatar.roblox.com/v1/users/" + id + "/currently-wearing"))
+        val ids = j.optJSONArray("assetIds") ?: return out
+        for (i in 0 until minOf(ids.length(), 40)) {
+            val aid = ids.getLong(i)
+            try {
+                val d = JSONObject(Assets.httpGet("https://economy.roblox.com/v2/assets/" + aid + "/details"))
+                out.add(Item(aid, d.optInt("AssetTypeId", -1), d.optString("Name", "Item")))
+            } catch (e: Exception) {
+                errors.add("tipo do item " + aid + ": " + (e.message ?: e.javaClass.simpleName))
+            }
+        }
+        return out
     }
 
     fun load(ctx: Context, onDone: ((String) -> Unit)? = null) {
@@ -70,16 +113,34 @@ object Avatar {
         if (id.isEmpty()) return
         Thread {
             errors.clear()
+            var got = 0
             try {
                 val o = JSONObject(Assets.httpGet("https://avatar.roblox.com/v1/users/" + id + "/avatar"))
                 loadColors(o)
-                loadWearing(o)
+                var items = parseItems(o.optJSONArray("assets"))
+                if (items.isEmpty()) {
+                    try {
+                        val o2 = JSONObject(Assets.httpGet("https://avatar.roblox.com/v2/avatar/users/" + id + "/avatar"))
+                        items = parseItems(o2.optJSONArray("assets"))
+                    } catch (e: Exception) {
+                        errors.add("avatar v2: " + (e.message ?: e.javaClass.simpleName))
+                    }
+                }
+                if (items.isEmpty()) {
+                    try { items = wearingFallback(id) } catch (e: Exception) {
+                        errors.add("currently-wearing: " + (e.message ?: e.javaClass.simpleName))
+                    }
+                }
+                got = items.size
+                loadWearing(items)
             } catch (e: Exception) {
                 errors.add("avatar: " + (e.message ?: e.javaClass.simpleName))
             }
-            var s = "Avatar: " + (if (shirt != null) "camisa OK" else "sem camisa") + ", " +
+            var s = "Avatar (" + got + " item(ns)): " + (if (shirt != null) "camisa OK" else "sem camisa") + ", " +
                 (if (pants != null) "calça OK" else "sem calça") + ", " +
-                (if (tshirt != null) "camiseta OK" else "sem camiseta") + ", " + accs.size + " acessório(s)"
+                (if (tshirt != null) "camiseta OK" else "sem camiseta") + ", " +
+                (if (face != null) "rosto OK, " else "") + accs.size + " acessório(s)"
+            if (layered > 0) s += ", " + layered + " roupa(s) em camadas (ainda não suportada)"
             if (errors.isNotEmpty()) s += "\nFalhou: " + errors.first().take(120) + " (" + errors.size + " erro(s))"
             status = s
             Out.add(s, if (errors.isEmpty()) 0 else 1)
@@ -111,32 +172,21 @@ object Avatar {
         version++
     }
 
-    private fun loadWearing(o: JSONObject) {
-        val arr = o.optJSONArray("assets") ?: return
+    private fun loadWearing(items: List<Item>) {
         val accList = ArrayList<Acc>()
-        for (i in 0 until arr.length()) {
-            val a = arr.getJSONObject(i)
-            val aid = a.optLong("id", 0L)
-            val tid = a.optJSONObject("assetType")?.optInt("id", -1) ?: -1
-            if (aid == 0L) continue
+        layered = 0
+        for (item in items) {
             try {
-                when (tid) {
-                    T_SHIRT -> {
-                        val bmp = clothingTemplate(aid)
-                        if (bmp != null) { shirt = bmp; version++ }
-                    }
-                    T_PANTS -> {
-                        val bmp = clothingTemplate(aid)
-                        if (bmp != null) { pants = bmp; version++ }
-                    }
-                    T_TSHIRT -> {
-                        val bmp = clothingTemplate(aid)
-                        if (bmp != null) { tshirt = bmp; version++ }
-                    }
+                when (item.type) {
+                    T_SHIRT -> { val b = clothingTemplate(item.id); if (b != null) { shirt = b; version++ } }
+                    T_PANTS -> { val b = clothingTemplate(item.id); if (b != null) { pants = b; version++ } }
+                    T_TSHIRT -> { val b = clothingTemplate(item.id); if (b != null) { tshirt = b; version++ } }
+                    T_FACE -> { val b = clothingTemplate(item.id); if (b != null) { face = b; version++ } }
+                    in 64..72 -> layered++
                     else -> {
-                        val kind = ACC_TYPES[tid]
+                        val kind = ACC_TYPES[item.type]
                         if (kind != null && accList.size < MAX_ACCS) {
-                            val acc = loadAccessory(aid, a.optString("name", "Acessório"), kind)
+                            val acc = loadAccessory(item.id, item.name, kind)
                             if (acc != null) {
                                 accList.add(acc)
                                 accs = ArrayList(accList)
@@ -146,7 +196,7 @@ object Avatar {
                     }
                 }
             } catch (e: Exception) {
-                errors.add("item " + aid + ": " + (e.message ?: e.javaClass.simpleName))
+                errors.add(item.name + " (" + item.id + "): " + (e.message ?: e.javaClass.simpleName))
             }
         }
         accs = ArrayList(accList)
@@ -253,10 +303,12 @@ object Avatar {
         val ids = refs(raw)
         var mesh: Mesh? = null
         var tex: Bitmap? = null
+        var meshVer = ""
         for (r in ids) {
             val b = try { asset(r) } catch (e: Exception) { continue }
             if (mesh == null && b.size > 12 && String(b, 0, 8, Charsets.ISO_8859_1).startsWith("version ")) {
                 mesh = parseMesh(b)
+                if (mesh == null) meshVer = String(b, 0, 12, Charsets.ISO_8859_1).trim()
                 continue
             }
             if (tex == null) {
@@ -265,7 +317,7 @@ object Avatar {
             }
         }
         val m = mesh ?: run {
-            errors.add("acessório " + name + ": malha não suportada")
+            errors.add(name + ": malha " + (if (meshVer.isEmpty()) "não encontrada" else meshVer + " não suportada"))
             return null
         }
         return Acc(name, kind, m.data, m.min, m.max, tex)
@@ -353,7 +405,8 @@ object Avatar {
         return try {
             when {
                 head.startsWith("version 1.") -> parseMeshV1(b)
-                head.startsWith("version 2.") || head.startsWith("version 3.") -> parseMeshBin(b, head.startsWith("version 3."))
+                head.startsWith("version 2.") || head.startsWith("version 3.") || head.startsWith("version 4.") ->
+                    parseMeshBin(b, head.substring(8, 9).toInt())
                 else -> null
             }
         } catch (e: Exception) {
@@ -361,7 +414,9 @@ object Avatar {
         }
     }
 
-    private fun parseMeshBin(b: ByteArray, v3: Boolean): Mesh? {
+    private fun parseMeshBin(b: ByteArray, ver: Int): Mesh? {
+        val v3 = ver == 3
+        val v4 = ver == 4
         val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)
         var p = 13 // "version X.XX\n"
         val hdrSize = bb.getShort(p).toInt() and 0xffff
@@ -370,7 +425,13 @@ object Avatar {
         var nVerts: Int
         var nFaces: Int
         var lodCount = 0
-        if (v3) {
+        if (v4) {
+            vSize = 40
+            fSize = 12
+            nVerts = bb.getInt(p + 4)
+            nFaces = bb.getInt(p + 8)
+            lodCount = bb.getShort(p + 12).toInt() and 0xffff
+        } else if (v3) {
             vSize = bb.get(p + 2).toInt() and 255
             fSize = bb.get(p + 3).toInt() and 255
             lodCount = bb.getShort(p + 6).toInt() and 0xffff
@@ -387,7 +448,7 @@ object Avatar {
         val vOff = p
         val fOff = vOff + nVerts * vSize
         // v3: só o nível de detalhe 0
-        if (v3 && lodCount >= 2) {
+        if ((v3 || v4) && lodCount >= 2) {
             val lodOff = fOff + nFaces * fSize
             val end = bb.getInt(lodOff + 4)
             if (end in 1..nFaces) nFaces = end

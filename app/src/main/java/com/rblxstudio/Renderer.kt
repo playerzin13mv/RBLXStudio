@@ -195,7 +195,7 @@ class Renderer : GLSurfaceView.Renderer {
         texIds.clear()
         texAsked.clear()
         avVer = -1
-        shirtTex = 0; pantsTex = 0; tshirtTex = 0
+        shirtTex = 0; pantsTex = 0; tshirtTex = 0; faceTex = 0
         accGl.clear()
     }
 
@@ -282,6 +282,7 @@ class Renderer : GLSurfaceView.Renderer {
     private var shirtTex = 0
     private var pantsTex = 0
     private var tshirtTex = 0
+    private var faceTex = 0
     private val accGl = ArrayList<AccGl>()
     private val faceArr = FloatArray(24)
     private val pm = FloatArray(16)
@@ -296,12 +297,14 @@ class Renderer : GLSurfaceView.Renderer {
         val v = Avatar.version
         if (v == avVer) return
         avVer = v
-        delTex(shirtTex); delTex(pantsTex); delTex(tshirtTex)
+        delTex(shirtTex); delTex(pantsTex); delTex(tshirtTex); delTex(faceTex)
         for (g in accGl) delTex(g.tex)
         accGl.clear()
         val sh = Avatar.shirt
         val pa = Avatar.pants
         val ts = Avatar.tshirt
+        val fc = Avatar.face
+        faceTex = if (fc != null) upload(fc) else 0
         shirtTex = if (sh != null) upload(sh) else 0
         pantsTex = if (pa != null) upload(pa) else 0
         tshirtTex = if (ts != null) upload(ts) else 0
@@ -452,6 +455,7 @@ class Renderer : GLSurfaceView.Renderer {
         var py = 0f
         var pz = 0f
         when (a.type) {
+            "Head" -> py = 0f
             "Hat" -> py = 0.4f + h / 2f
             "Hair" -> py = 0.8f - h / 2f
             "Face" -> { py = 0.05f; pz = 0.62f - d / 2f }
@@ -463,6 +467,7 @@ class Renderer : GLSurfaceView.Renderer {
         }
         Matrix.translateM(pm, 0, px, py, pz)
         Matrix.rotateM(pm, 0, 180f, 0f, 1f, 0f)   // o Roblox olha para -Z; aqui o avatar olha para +Z
+        if (a.type == "Head") { val sc = 1.2f / maxOf(h, 0.01f); Matrix.scaleM(pm, 0, sc, sc, sc) }
         Matrix.translateM(pm, 0,
             -(a.min[0] + a.max[0]) / 2f, -(a.min[1] + a.max[1]) / 2f, -(a.min[2] + a.max[2]) / 2f)
         useMesh(g.buf)
@@ -487,17 +492,19 @@ class Renderer : GLSurfaceView.Renderer {
         syncAvatar()
         use(cube)
         curTex = 0
+        val hasHead = accGl.any { it.acc.type == "Head" }
         for (i in 0..5) {
             if (!partMatrix(i, pm)) continue
             val o = halfs[i]
+            if (i == 1 && hasHead) continue   // cabeça de malha substitui o cubo
             drawBox(pm, 0f, 0f, 0f, o[0], o[1], o[2], colOf(i))
-            if (i == 1) {   // olhos
+            if (i == 1 && faceTex == 0) {   // olhos padrão (sem rosto do avatar)
                 drawBox(pm, -0.22f, 0.1f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
                 drawBox(pm, 0.22f, 0.1f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
             }
         }
         // camadas de roupa (alpha), na ordem: calça, camisa, camiseta
-        if (pantsTex != 0 || shirtTex != 0 || tshirtTex != 0) {
+        if (pantsTex != 0 || shirtTex != 0 || tshirtTex != 0 || (faceTex != 0 && !hasHead)) {
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
             GLES20.glDepthFunc(GLES20.GL_LEQUAL)
@@ -510,6 +517,7 @@ class Renderer : GLSurfaceView.Renderer {
                 if (partMatrix(i, pm)) overlay(pm, i, shirtTex, 1.02f, false)
             }
             if (partMatrix(0, pm)) overlay(pm, 0, tshirtTex, 1.03f, true)
+            if (!hasHead && partMatrix(1, pm)) overlay(pm, 1, faceTex, 1.02f, true)
             GLES20.glDepthMask(true)
             GLES20.glDepthFunc(GLES20.GL_LESS)
             GLES20.glDisable(GLES20.GL_BLEND)
@@ -542,7 +550,7 @@ class Renderer : GLSurfaceView.Renderer {
         var tx = Cam.target[0]
         var ty = Cam.target[1]
         var tz = Cam.target[2]
-        if (Cam.shoulder != 0f) {
+        if (Cam.shoulder != 0f && !(Play.active && Play.firstPerson())) {
             val rt = Cam.basis()[1]
             val sh = Cam.shoulder
             e[0] += rt[0] * sh; e[1] += rt[1] * sh; e[2] += rt[2] * sh
@@ -572,7 +580,7 @@ class Renderer : GLSurfaceView.Renderer {
         curTex = 0
 
         if (Play.active) {
-            drawAvatar()
+            if (!Play.firstPerson()) drawAvatar()
             return
         }
 

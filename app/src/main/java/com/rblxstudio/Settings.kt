@@ -13,6 +13,7 @@ object Settings {
     @Volatile var shiftLockSwitch = true   // mostra o botão de Shift Lock
     @Volatile var camMode = CAM_CLASSIC
     @Volatile var moveMode = MOVE_JOYSTICK
+    @Volatile var firstPerson = false
 
     private const val PREFS = "game_settings"
 
@@ -21,6 +22,7 @@ object Settings {
         shiftLockSwitch = p.getBoolean("shiftLockSwitch", true)
         camMode = p.getInt("camMode", CAM_CLASSIC)
         moveMode = p.getInt("moveMode", MOVE_JOYSTICK)
+        firstPerson = p.getBoolean("firstPerson", false)
     }
 
     fun save(c: Context) {
@@ -28,6 +30,7 @@ object Settings {
             .putBoolean("shiftLockSwitch", shiftLockSwitch)
             .putInt("camMode", camMode)
             .putInt("moveMode", moveMode)
+            .putBoolean("firstPerson", firstPerson)
             .apply()
     }
 }
