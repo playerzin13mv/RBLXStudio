@@ -227,6 +227,23 @@ object Scene {
         selObj = null
     }
 
+    // modelos da tela inicial (New): Baseplate, Classic Baseplate e Projeto Vazio
+    fun applyTemplate(name: String) {
+        clearAll()
+        when (name) {
+            "Baseplate" -> {
+                val bp = PartData("Baseplate", 0f, -10f, 0f, 512f, 20f, 512f, 0.39f, 0.37f, 0.38f, true)
+                bp.grid = true
+                parts.add(bp)
+            }
+            "Classic Baseplate" -> {
+                parts.add(PartData("Baseplate", 0f, -10f, 0f, 512f, 20f, 512f, 0.639f, 0.635f, 0.647f, true))
+            }
+            else -> {}
+        }
+        parts.add(PartData("SpawnLocation", 0f, 0.5f, 0f, 6f, 1f, 6f, 0.64f, 0.635f, 0.647f, true))
+    }
+
     fun reset() {
         clearAll()
         val bp = PartData("Baseplate", 0f, -10f, 0f, 512f, 20f, 512f, 0.39f, 0.37f, 0.38f, true)

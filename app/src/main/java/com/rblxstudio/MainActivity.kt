@@ -77,6 +77,7 @@ class PlayHud(ctx: Context) : View(ctx) {
 
 class MainActivity : Activity() {
     private lateinit var gl: GLSurfaceView
+    internal lateinit var menu: MainMenu
     private val renderer = Renderer()
     internal lateinit var ribbon: LinearLayout
     internal lateinit var explorerList: LinearLayout
@@ -248,7 +249,11 @@ class MainActivity : Activity() {
             false
         }
         root.addView(cmd, lp(MATCH, dp(26)))
-        setContentView(root)
+        val holder = FrameLayout(this)
+        holder.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
+        menu = MainMenu(this)
+        holder.addView(menu, FrameLayout.LayoutParams(MATCH, MATCH))
+        setContentView(holder)
 
         Out.listener = { kind ->
             runOnUiThread {
@@ -657,11 +662,40 @@ class MainActivity : Activity() {
 
     private fun newPlace() {
         if (needStop()) return
-        Scene.reset()
+        menu.show()
+    }
+
+    // escolhido na tela inicial (aba New)
+    internal fun openTemplate(name: String) {
+        if (needStop()) return
+        Scene.applyTemplate(name)
         History.clear()
         placeName = null
         lastSel = null
         Editor.select(null)
+        menu.hide()
+        toast("Novo: " + name)
+    }
+
+    // escolhido na tela inicial (aba Recent)
+    internal fun openSaved(name: String) {
+        if (needStop()) return
+        try {
+            Storage.load(this, name)
+            History.clear()
+            placeName = name
+            lastSel = null
+            Editor.select(null)
+            menu.hide()
+            toast("Aberto: " + name)
+        } catch (e: Exception) {
+            toast("Não consegui abrir esse arquivo")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (menu.visibility == View.VISIBLE) menu.hide() else super.onBackPressed()
     }
 
     private fun openPlace() {
