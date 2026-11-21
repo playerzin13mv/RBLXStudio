@@ -190,18 +190,19 @@ class Renderer : GLSurfaceView.Renderer {
             1f, 0f, GLES20.GL_TRIANGLES, 36)
     }
 
+    // cores do corpo vêm do avatar do Roblox (Avatar.cols)
     private fun drawAvatar() {
         use(cube)
+        val c = Avatar.cols
         val swing = if (Play.moving) sin(Play.walkT * 11f) * 45f else 0f
-        val skin = 0xF5CD30
-        body(0f, 0.5f, 0f, 1f, 1f, 0.5f, 0x0D69AC)                          // torso
-        body(0f, 1.9f, 0f, 0.6f, 0.6f, 0.6f, skin)                         // cabeça
+        body(0f, 0.5f, 0f, 1f, 1f, 0.5f, c[1])                              // torso
+        body(0f, 1.9f, 0f, 0.6f, 0.6f, 0.6f, c[0])                         // cabeça
         body(-0.22f, 2.0f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)            // olhos
         body(0.22f, 2.0f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
-        body(-1.5f, 0.5f, 0f, 0.5f, 1f, 0.5f, skin, swing, 1.5f)           // braços
-        body(1.5f, 0.5f, 0f, 0.5f, 1f, 0.5f, skin, -swing, 1.5f)
-        body(-0.5f, -1.5f, 0f, 0.5f, 1f, 0.5f, 0x4B974B, -swing, -0.5f)    // pernas
-        body(0.5f, -1.5f, 0f, 0.5f, 1f, 0.5f, 0x4B974B, swing, -0.5f)
+        body(-1.5f, 0.5f, 0f, 0.5f, 1f, 0.5f, c[2], swing, 1.5f)           // braços
+        body(1.5f, 0.5f, 0f, 0.5f, 1f, 0.5f, c[3], -swing, 1.5f)
+        body(-0.5f, -1.5f, 0f, 0.5f, 1f, 0.5f, c[4], -swing, -0.5f)        // pernas
+        body(0.5f, -1.5f, 0f, 0.5f, 1f, 0.5f, c[5], swing, -0.5f)
     }
 
     override fun onDrawFrame(gl: GL10?) {
