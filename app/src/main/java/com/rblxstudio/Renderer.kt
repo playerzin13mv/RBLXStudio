@@ -6,37 +6,32 @@ import android.opengl.Matrix
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
-import java.util.concurrent.CopyOnWriteArrayList
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
-class PartData(
-    val x: Float, val y: Float, val z: Float,
-    val sx: Float, val sy: Float, val sz: Float,
-    val r: Float, val g: Float, val b: Float
-)
-
 class Renderer : GLSurfaceView.Renderer {
-    val parts = CopyOnWriteArrayList<PartData>()
-    private val ground = PartData(0f, -0.5f, 0f, 60f, 0.5f, 60f, 0.35f, 0.55f, 0.3f)
-    @Volatile var yaw = 0.6f
-    @Volatile var pitch = 0.5f
-    @Volatile var dist = 30f
-
     private val proj = FloatArray(16)
     private val view = FloatArray(16)
     private val vp = FloatArray(16)
     private val model = FloatArray(16)
-    private val mvp = FloatArray(16)
+    private val tmp = FloatArray(16)
     private var prog = 0
     private var aP = 0
     private var aN = 0
-    private var uMVP = 0
+    private var uVP = 0
+    private var uModel = 0
     private var uColor = 0
-    private lateinit var buf: FloatBuffer
+    private var uLight = 0
+    private var uGrid = 0
+    private lateinit var cube: FloatBuffer
+    private lateinit var lines: FloatBuffer
+    private lateinit var ring: FloatBuffer
+    private var ringCount = 0
+    private val yellow = floatArrayOf(1f, 0.9f, 0.2f)
 
     private fun cross(a: FloatArray, b: FloatArray) = floatArrayOf(
         a[1] * b[2] - a[2] * b[1],
@@ -44,7 +39,14 @@ class Renderer : GLSurfaceView.Renderer {
         a[0] * b[1] - a[1] * b[0]
     )
 
-    private fun buildCube() {
+    private fun makeBuf(d: List<Float>): FloatBuffer {
+        val b = ByteBuffer.allocateDirect(d.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        b.put(d.toFloatArray())
+        b.position(0)
+        return b
+    }
+
+    private fun buildMeshes() {
         val d = ArrayList<Float>()
         val ns = arrayOf(
             floatArrayOf(1f, 0f, 0f), floatArrayOf(-1f, 0f, 0f),
@@ -62,9 +64,38 @@ class Renderer : GLSurfaceView.Renderer {
             c(-1f, -1f); c(1f, -1f); c(1f, 1f)
             c(-1f, -1f); c(1f, 1f); c(-1f, 1f)
         }
-        buf = ByteBuffer.allocateDirect(d.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-        buf.put(d.toFloatArray())
-        buf.position(0)
+        cube = makeBuf(d)
+
+        val ld = ArrayList<Float>()
+        for (i in 0..7) {
+            for (b in 0..2) {
+                if ((i and (1 shl b)) == 0) {
+                    val j = i or (1 shl b)
+                    for (cc in intArrayOf(i, j)) {
+                        ld.add(if ((cc and 1) != 0) 1f else -1f)
+                        ld.add(if ((cc and 2) != 0) 1f else -1f)
+                        ld.add(if ((cc and 4) != 0) 1f else -1f)
+                        ld.add(0f); ld.add(1f); ld.add(0f)
+                    }
+                }
+            }
+        }
+        lines = makeBuf(ld)
+
+        val n = 48
+        val rd = ArrayList<Float>()
+        fun vtx(a: Float, rad: Float) {
+            rd.add(cos(a) * rad); rd.add(sin(a) * rad); rd.add(0f)
+            rd.add(0f); rd.add(0f); rd.add(1f)
+        }
+        for (i in 0 until n) {
+            val a0 = (2 * PI * i / n).toFloat()
+            val a1 = (2 * PI * (i + 1) / n).toFloat()
+            vtx(a0, 0.96f); vtx(a0, 1.04f); vtx(a1, 1.04f)
+            vtx(a0, 0.96f); vtx(a1, 1.04f); vtx(a1, 0.96f)
+        }
+        ringCount = n * 6
+        ring = makeBuf(rd)
     }
 
     private fun shader(type: Int, src: String): Int {
@@ -75,54 +106,116 @@ class Renderer : GLSurfaceView.Renderer {
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        GLES20.glClearColor(0.53f, 0.75f, 0.92f, 1f)
-        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
-        buildCube()
-        val vs = "uniform mat4 uMVP; attribute vec3 aP; attribute vec3 aN; varying float vL;\n" +
-            "void main(){ vL = 0.4 + 0.6 * max(dot(aN, normalize(vec3(0.4,1.0,0.6))), 0.0);\n" +
-            "gl_Position = uMVP * vec4(aP, 1.0); }"
-        val fs = "precision mediump float; uniform vec3 uColor; varying float vL;\n" +
-            "void main(){ gl_FragColor = vec4(uColor * vL, 1.0); }"
+        GLES20.glClearColor(0.62f, 0.69f, 0.80f, 1f)
+        buildMeshes()
+        val vs = "uniform mat4 uVP; uniform mat4 uModel; attribute vec3 aP; attribute vec3 aN;\n" +
+            "varying float vL; varying vec3 vW;\n" +
+            "void main(){ vec4 w = uModel * vec4(aP, 1.0); vW = w.xyz;\n" +
+            "vec3 n = normalize((uModel * vec4(aN, 0.0)).xyz);\n" +
+            "vL = 0.45 + 0.55 * max(dot(n, normalize(vec3(0.4, 1.0, 0.6))), 0.0);\n" +
+            "gl_Position = uVP * w; }"
+        val fs = "precision mediump float; uniform vec3 uColor; uniform float uLight; uniform float uGrid;\n" +
+            "varying float vL; varying vec3 vW;\n" +
+            "void main(){ vec3 c = uColor;\n" +
+            "if (uGrid > 0.5) { float k = mod(floor(vW.x / 16.0) + floor(vW.z / 16.0), 2.0); c = c * (0.85 + 0.15 * k); }\n" +
+            "gl_FragColor = vec4(c * mix(1.0, vL, uLight), 1.0); }"
         prog = GLES20.glCreateProgram()
         GLES20.glAttachShader(prog, shader(GLES20.GL_VERTEX_SHADER, vs))
         GLES20.glAttachShader(prog, shader(GLES20.GL_FRAGMENT_SHADER, fs))
         GLES20.glLinkProgram(prog)
         aP = GLES20.glGetAttribLocation(prog, "aP")
         aN = GLES20.glGetAttribLocation(prog, "aN")
-        uMVP = GLES20.glGetUniformLocation(prog, "uMVP")
+        uVP = GLES20.glGetUniformLocation(prog, "uVP")
+        uModel = GLES20.glGetUniformLocation(prog, "uModel")
         uColor = GLES20.glGetUniformLocation(prog, "uColor")
+        uLight = GLES20.glGetUniformLocation(prog, "uLight")
+        uGrid = GLES20.glGetUniformLocation(prog, "uGrid")
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
         GLES20.glViewport(0, 0, w, h)
-        Matrix.perspectiveM(proj, 0, 60f, w.toFloat() / h, 0.5f, 500f)
+        Cam.w = w
+        Cam.h = h
+        Matrix.perspectiveM(proj, 0, Cam.FOV, w.toFloat() / h, 1f, 2500f)
     }
 
-    private fun drawPart(p: PartData) {
-        Matrix.setIdentityM(model, 0)
-        Matrix.translateM(model, 0, p.x, p.y, p.z)
-        Matrix.scaleM(model, 0, p.sx, p.sy, p.sz)
-        Matrix.multiplyMM(mvp, 0, vp, 0, model, 0)
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
-        GLES20.glUniform3f(uColor, p.r, p.g, p.b)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 36)
-    }
-
-    override fun onDrawFrame(gl: GL10?) {
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-        val ex = dist * cos(pitch) * sin(yaw)
-        val ey = 2f + dist * sin(pitch)
-        val ez = dist * cos(pitch) * cos(yaw)
-        Matrix.setLookAtM(view, 0, ex, ey, ez, 0f, 2f, 0f, 0f, 1f, 0f)
-        Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
-        GLES20.glUseProgram(prog)
+    private fun use(buf: FloatBuffer) {
         buf.position(0)
         GLES20.glVertexAttribPointer(aP, 3, GLES20.GL_FLOAT, false, 24, buf)
         GLES20.glEnableVertexAttribArray(aP)
         buf.position(3)
         GLES20.glVertexAttribPointer(aN, 3, GLES20.GL_FLOAT, false, 24, buf)
         GLES20.glEnableVertexAttribArray(aN)
-        drawPart(ground)
-        for (p in parts) drawPart(p)
+    }
+
+    private fun draw(m: FloatArray, r: Float, g: Float, b: Float, light: Float, grid: Float, mode: Int, count: Int) {
+        GLES20.glUniformMatrix4fv(uModel, 1, false, m, 0)
+        GLES20.glUniform3f(uColor, r, g, b)
+        GLES20.glUniform1f(uLight, light)
+        GLES20.glUniform1f(uGrid, grid)
+        GLES20.glDrawArrays(mode, 0, count)
+    }
+
+    private fun handleModel(h: Editor.Handle) {
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, h.center[0], h.center[1], h.center[2])
+        if (h.ori != null) {
+            Matrix.multiplyMM(tmp, 0, model, 0, h.ori, 0)
+            System.arraycopy(tmp, 0, model, 0, 16)
+        }
+        Matrix.scaleM(model, 0, h.half[0], h.half[1], h.half[2])
+    }
+
+    private fun ringModel(sel: PartData, i: Int) {
+        val rad = Editor.radius(sel) + 1.5f * Editor.k()
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, sel.x, sel.y, sel.z)
+        if (i == 0) Matrix.rotateM(model, 0, 90f, 0f, 1f, 0f)
+        else if (i == 1) Matrix.rotateM(model, 0, -90f, 1f, 0f, 0f)
+        Matrix.scaleM(model, 0, rad, rad, rad)
+    }
+
+    override fun onDrawFrame(gl: GL10?) {
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+        val e = Cam.eye()
+        Matrix.setLookAtM(view, 0, e[0], e[1], e[2], Cam.target[0], Cam.target[1], Cam.target[2], 0f, 1f, 0f)
+        Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
+        GLES20.glUseProgram(prog)
+        GLES20.glUniformMatrix4fv(uVP, 1, false, vp, 0)
+
+        use(cube)
+        for (p in Scene.parts) {
+            p.model(model)
+            draw(model, p.r, p.g, p.b, 1f, if (p.grid) 1f else 0f, GLES20.GL_TRIANGLES, 36)
+        }
+
+        val sel = Scene.selected ?: return
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+        use(lines)
+        sel.model(model, 1.01f)
+        GLES20.glLineWidth(4f)
+        draw(model, 0.1f, 0.65f, 1f, 0f, 0f, GLES20.GL_LINES, 24)
+
+        when (Editor.tool) {
+            Tool.MOVE, Tool.SCALE -> {
+                use(cube)
+                for (h in Editor.handles(sel)) {
+                    handleModel(h)
+                    val on = Editor.activeHandle == h.axis * 2 + (if (h.sign > 0f) 0 else 1)
+                    val c = if (on) yellow else Editor.axisColors[h.axis]
+                    draw(model, c[0], c[1], c[2], 0f, 0f, GLES20.GL_TRIANGLES, 36)
+                }
+            }
+            Tool.ROTATE -> {
+                use(ring)
+                for (i in 0..2) {
+                    ringModel(sel, i)
+                    val c = if (Editor.activeHandle == i * 2) yellow else Editor.axisColors[i]
+                    draw(model, c[0], c[1], c[2], 0f, 0f, GLES20.GL_TRIANGLES, ringCount)
+                }
+            }
+            else -> {}
+        }
     }
 }
