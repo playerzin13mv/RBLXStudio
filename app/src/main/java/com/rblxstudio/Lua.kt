@@ -304,7 +304,7 @@ end
         }
         if (k == "Position" || k == "Size") {
             val n = parseNums(s)
-            return g!!.get("UDim2").get("new").call(nv(n[0]), nv(n[1]), nv(n[2]), nv(n[3]))
+            return g!!.get("UDim2").get("new").invoke(LuaValue.varargsOf(arrayOf<LuaValue>(nv(n[0]), nv(n[1]), nv(n[2]), nv(n[3])))).arg1()
         }
         if (k == "AnchorPoint") {
             val n = parseNums(s)
