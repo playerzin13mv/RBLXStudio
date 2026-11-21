@@ -222,8 +222,27 @@ internal fun MainActivity.numRow(label: String, get: () -> Float, set: (Float) -
 }
 
 // campo de texto simples ligado a uma propriedade (props) de qualquer objeto
+internal val imageKeys = setOf("Texture", "TextureID", "Image")
+
 internal fun MainActivity.propRow(o: Inst, key: String) {
-    addRow(key, field(o.prop(key), false) { s -> o.props[key] = s })
+    val et = field(o.prop(key), false) { s ->
+        if (o.prop(key) != s) {
+            o.props[key] = s
+            Editor.onChanged?.invoke(false)
+        }
+    }
+    refreshers.add {
+        if (!et.hasFocus()) {
+            val v = o.prop(key)
+            if (et.text.toString() != v) et.setText(v)
+        }
+    }
+    addRow(key, et)
+    if (key in imageKeys) {
+        val b = tv("Galeria", 11f, C_SEL, true)
+        b.setOnClickListener { pickImage(o, key) }
+        addRow("   escolher do celular", b)
+    }
 }
 
 internal fun MainActivity.buildProps() {
@@ -300,6 +319,13 @@ internal fun MainActivity.buildProps() {
         val ax = arrayOf("X", "Y", "Z")[i]
         numRow("Size " + ax, { p.size(i) }) { v -> p.setSize(i, if (v < 0.05f) 0.05f else v) }
     }
+
+    section("Texture")
+    propRow(p, "Texture")
+    propRow(p, "StudsPerTile")
+    val hint = tv("Texture: ID, link ou imagem da galeria. StudsPerTile vazio = estica na face; 4 = repete a cada 4 studs.", 10f, C_DIM)
+    hint.setPadding(dp(8), dp(2), dp(8), dp(4))
+    propsList.addView(hint, lp(MATCH, WRAP))
 
     section("Physics")
     numRow("Friction", { p.friction }) { p.friction = it.coerceIn(0f, 2f) }

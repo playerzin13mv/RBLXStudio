@@ -29,6 +29,7 @@ import java.net.URL
 // baixar texto / imagens do Roblox pelo ID
 object Assets {
     private val cache = HashMap<String, Bitmap>()
+    @Volatile var dir: java.io.File? = null   // imagens escolhidas da galeria (file:nome.png)
     private val main = Handler(Looper.getMainLooper())
 
     fun idOf(s: String): String = s.filter { it.isDigit() }
@@ -53,7 +54,18 @@ object Assets {
         Thread {
             var bmp: Bitmap? = null
             try {
-                val url = if (s.startsWith("http")) s else {
+                if (s.startsWith("file:")) {
+                    val f = java.io.File(dir, s.removePrefix("file:").replace("/", "_"))
+                    val o1 = BitmapFactory.Options()
+                    o1.inJustDecodeBounds = true
+                    BitmapFactory.decodeFile(f.absolutePath, o1)
+                    var ss = 1
+                    while (o1.outWidth / ss > 1024 || o1.outHeight / ss > 1024) ss *= 2
+                    val o2 = BitmapFactory.Options()
+                    o2.inSampleSize = ss
+                    bmp = BitmapFactory.decodeFile(f.absolutePath, o2)
+                }
+                val url = if (s.startsWith("file:")) "" else if (s.startsWith("http")) s else {
                     val meta = httpGet("https://thumbnails.roblox.com/v1/assets?assetIds=" + idOf(s) +
                         "&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false")
                     JSONObject(meta).getJSONArray("data").getJSONObject(0).optString("imageUrl", "")
@@ -134,6 +146,8 @@ class GameGui(private val act: Activity) : FrameLayout(act) {
     private val chatInput = EditText(act)
     private val playersBox = LinearLayout(act)
     private var running = false
+    private val bubble = TextView(act)
+    private var bubbleUntil = 0L
     private var tick = 0
     var onLeave: (() -> Unit)? = null
     var onRespawn: (() -> Unit)? = null
@@ -234,6 +248,50 @@ class GameGui(private val act: Activity) : FrameLayout(act) {
         val plp = FrameLayout.LayoutParams(dp(150), -2, Gravity.TOP or Gravity.END)
         plp.setMargins(0, dp(62), dp(8), 0)
         addView(playersBox, plp)
+
+        // bolha de chat em cima da cabeça do personagem
+        bubble.textSize = 12f
+        bubble.setTextColor(0xFF1B1B1B.toInt())
+        bubble.maxWidth = dp(220)
+        bubble.setPadding(dp(10), dp(6), dp(10), dp(6))
+        val bb = GradientDrawable()
+        bb.setColor(0xF2FFFFFF.toInt())
+        bb.cornerRadius = dp(12).toFloat()
+        bubble.background = bb
+        bubble.visibility = View.GONE
+        addView(bubble, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
+    }
+
+    private val bubbleTicker = object : Runnable {
+        override fun run() {
+            if (!running) return
+            updateBubble()
+            hd.postDelayed(this, 33)
+        }
+    }
+
+    fun say(msg: String) {
+        bubble.text = msg
+        bubble.alpha = 0f
+        bubble.visibility = View.VISIBLE
+        bubbleUntil = android.os.SystemClock.uptimeMillis() + 4000L + 60L * msg.length.coerceAtMost(100)
+    }
+
+    private fun updateBubble() {
+        if (bubble.visibility != View.VISIBLE) return
+        val left = bubbleUntil - android.os.SystemClock.uptimeMillis()
+        if (left <= 0L) {
+            bubble.visibility = View.GONE
+            return
+        }
+        val s = Renderer.project(Play.x, Play.y + 3.1f, Play.z, width, height)
+        if (s == null) {
+            bubble.alpha = 0f
+            return
+        }
+        bubble.alpha = if (left < 500L) left / 500f else 1f
+        bubble.translationX = s[0] - bubble.width / 2f
+        bubble.translationY = s[1] - bubble.height - dp(4)
     }
 
     private fun send() {
@@ -241,6 +299,7 @@ class GameGui(private val act: Activity) : FrameLayout(act) {
         if (m.isEmpty()) return
         chatInput.setText("")
         addChat(Play.playerName, m)
+        say(m)
         Lua.post { Lua.chatted(m) }
         (act.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(windowToken, 0)
     }
@@ -299,11 +358,14 @@ class GameGui(private val act: Activity) : FrameLayout(act) {
         chatRow.visibility = View.GONE
         refreshPlayers()
         hd.post(ticker)
+        hd.post(bubbleTicker)
     }
 
     fun stop() {
         running = false
         hd.removeCallbacks(ticker)
+        hd.removeCallbacks(bubbleTicker)
+        bubble.visibility = View.GONE
         userLayer.removeAllViews()
         views.clear()
         imgSrc.clear()

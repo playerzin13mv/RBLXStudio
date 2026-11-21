@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -27,6 +29,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 import java.util.Locale
 import kotlin.math.hypot
 
@@ -78,6 +81,9 @@ class PlayHud(ctx: Context) : View(ctx) {
 class MainActivity : Activity() {
     private lateinit var gl: GLSurfaceView
     internal lateinit var menu: MainMenu
+    private lateinit var guiEditor: GuiEditor
+    private var imgTarget: Inst? = null
+    private var imgKey = ""
     private val renderer = Renderer()
     internal lateinit var ribbon: LinearLayout
     internal lateinit var explorerList: LinearLayout
@@ -154,6 +160,7 @@ class MainActivity : Activity() {
     // ---------- ciclo de vida ----------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Assets.dir = File(filesDir, "images").also { it.mkdirs() }
         gl = GLSurfaceView(this)
         gl.setEGLContextClientVersion(2)
         gl.setRenderer(renderer)
@@ -186,6 +193,9 @@ class MainActivity : Activity() {
         gui.onLeave = { stopPlay() }
         gui.onRespawn = { Play.respawnNow() }
         glFrame.addView(gui, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        guiEditor = GuiEditor(this)
+        glFrame.addView(guiEditor, FrameLayout.LayoutParams(MATCH, MATCH))
 
         outText = tv("", 10f, Color.WHITE)
         outText.typeface = Typeface.MONOSPACE
@@ -270,8 +280,10 @@ class MainActivity : Activity() {
                 }
                 buildExplorer()
                 buildProps()
+                guiEditor.refresh()
             } else {
                 updateProps()
+                guiEditor.refresh()
             }
         }
         open.add(Scene.workspace)
@@ -691,6 +703,63 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             toast("Não consegui abrir esse arquivo")
         }
+    }
+
+    // escolher imagem da galeria para uma propriedade (Texture, Image...)
+    internal fun pickImage(o: Inst, key: String) {
+        imgTarget = o
+        imgKey = key
+        val i = Intent(Intent.ACTION_GET_CONTENT)
+        i.type = "image/*"
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent.createChooser(i, "Escolher imagem"), 77)
+        } catch (e: Exception) {
+            toast("Não achei a galeria")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 77 || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        val target = imgTarget ?: return
+        val key = imgKey
+        Thread {
+            var ok = false
+            var name = ""
+            try {
+                val dir = File(filesDir, "images")
+                dir.mkdirs()
+                val o1 = BitmapFactory.Options()
+                o1.inJustDecodeBounds = true
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o1) }
+                var ss = 1
+                while (o1.outWidth / ss > 1024 || o1.outHeight / ss > 1024) ss *= 2
+                val o2 = BitmapFactory.Options()
+                o2.inSampleSize = ss
+                val bmp = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o2) }
+                if (bmp != null) {
+                    name = "img" + System.currentTimeMillis() + ".png"
+                    File(dir, name).outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    ok = true
+                }
+            } catch (e: Exception) {
+                ok = false
+            }
+            runOnUiThread {
+                if (ok) {
+                    target.props[key] = "file:" + name
+                    buildProps()
+                    Editor.onChanged?.invoke(false)
+                    toast("Imagem aplicada")
+                } else {
+                    toast("Não consegui abrir a imagem")
+                }
+            }
+        }.start()
     }
 
     @Suppress("DEPRECATION")

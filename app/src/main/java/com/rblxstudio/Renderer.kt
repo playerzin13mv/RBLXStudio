@@ -1,11 +1,14 @@
 package com.rblxstudio
 
+import android.graphics.Bitmap
 import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.concurrent.ConcurrentHashMap
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.PI
@@ -27,11 +30,34 @@ class Renderer : GLSurfaceView.Renderer {
     private var uColor = 0
     private var uLight = 0
     private var uGrid = 0
+    private var uTex = 0
+    private var uUseTex = 0
+    private var uHalf = 0
+    private var uTile = 0
+    private var curTex = 0
+    private val texIds = HashMap<String, Int>()
+    private val texAsked = HashSet<String>()
+    private val texPending = ConcurrentHashMap<String, Bitmap>()
     private lateinit var cube: FloatBuffer
     private lateinit var lines: FloatBuffer
     private lateinit var ring: FloatBuffer
     private var ringCount = 0
     private val yellow = floatArrayOf(1f, 0.9f, 0.2f)
+
+    companion object {
+        private val snap = FloatArray(16)
+
+        // posição na tela (px do viewport) de um ponto do mundo; null se estiver atrás da câmera
+        fun project(x: Float, y: Float, z: Float, w: Int, h: Int): FloatArray? {
+            val m = FloatArray(16)
+            synchronized(snap) { System.arraycopy(snap, 0, m, 0, 16) }
+            val cx = m[0] * x + m[4] * y + m[8] * z + m[12]
+            val cy = m[1] * x + m[5] * y + m[9] * z + m[13]
+            val cw = m[3] * x + m[7] * y + m[11] * z + m[15]
+            if (cw <= 0.01f) return null
+            return floatArrayOf((cx / cw * 0.5f + 0.5f) * w, (1f - (cy / cw * 0.5f + 0.5f)) * h)
+        }
+    }
     private var lastNs = 0L
 
     private fun cross(a: FloatArray, b: FloatArray) = floatArrayOf(
@@ -110,15 +136,28 @@ class Renderer : GLSurfaceView.Renderer {
         GLES20.glClearColor(0.62f, 0.69f, 0.80f, 1f)
         buildMeshes()
         val vs = "uniform mat4 uVP; uniform mat4 uModel; attribute vec3 aP; attribute vec3 aN;\n" +
-            "varying float vL; varying vec3 vW;\n" +
-            "void main(){ vec4 w = uModel * vec4(aP, 1.0); vW = w.xyz;\n" +
+            "varying float vL; varying vec3 vW; varying vec3 vO; varying vec3 vN;\n" +
+            "void main(){ vec4 w = uModel * vec4(aP, 1.0); vW = w.xyz; vO = aP; vN = aN;\n" +
             "vec3 n = normalize((uModel * vec4(aN, 0.0)).xyz);\n" +
             "vL = 0.45 + 0.55 * max(dot(n, normalize(vec3(0.4, 1.0, 0.6))), 0.0);\n" +
             "gl_Position = uVP * w; }"
-        val fs = "precision mediump float; uniform vec3 uColor; uniform float uLight; uniform float uGrid;\n" +
-            "varying float vL; varying vec3 vW;\n" +
+        val fs = "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
+            "uniform vec3 uColor; uniform float uLight; uniform float uGrid;\n" +
+            "uniform sampler2D uTex; uniform float uUseTex; uniform vec3 uHalf; uniform float uTile;\n" +
+            "varying float vL; varying vec3 vW; varying vec3 vO; varying vec3 vN;\n" +
             "void main(){ vec3 c = uColor;\n" +
             "if (uGrid > 0.5) { float k = mod(floor(vW.x / 16.0) + floor(vW.z / 16.0), 2.0); c = c * (0.85 + 0.15 * k); }\n" +
+            "if (uUseTex > 0.5) {\n" +
+            "  vec3 an = abs(vN); vec2 uv; vec2 ext;\n" +
+            "  if (an.x > 0.5) { uv = vec2(-vO.z * sign(vN.x), vO.y); ext = vec2(uHalf.z, uHalf.y); }\n" +
+            "  else if (an.y > 0.5) { uv = vec2(vO.x, -vO.z * sign(vN.y)); ext = vec2(uHalf.x, uHalf.z); }\n" +
+            "  else { uv = vec2(vO.x * sign(vN.z), vO.y); ext = vec2(uHalf.x, uHalf.y); }\n" +
+            "  vec2 t = uv * 0.5 + 0.5;\n" +
+            "  if (uTile > 0.01) { t = uv * ext / uTile + 0.5; }\n" +
+            "  t.y = 1.0 - t.y;\n" +
+            "  vec4 tc = texture2D(uTex, t);\n" +
+            "  c = mix(c, tc.rgb, tc.a);\n" +
+            "}\n" +
             "gl_FragColor = vec4(c * mix(1.0, vL, uLight), 1.0); }"
         prog = GLES20.glCreateProgram()
         GLES20.glAttachShader(prog, shader(GLES20.GL_VERTEX_SHADER, vs))
@@ -131,6 +170,14 @@ class Renderer : GLSurfaceView.Renderer {
         uColor = GLES20.glGetUniformLocation(prog, "uColor")
         uLight = GLES20.glGetUniformLocation(prog, "uLight")
         uGrid = GLES20.glGetUniformLocation(prog, "uGrid")
+        uTex = GLES20.glGetUniformLocation(prog, "uTex")
+        uUseTex = GLES20.glGetUniformLocation(prog, "uUseTex")
+        uHalf = GLES20.glGetUniformLocation(prog, "uHalf")
+        uTile = GLES20.glGetUniformLocation(prog, "uTile")
+        GLES20.glUseProgram(prog)
+        GLES20.glUniform1i(uTex, 0)
+        texIds.clear()
+        texAsked.clear()
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
@@ -154,7 +201,40 @@ class Renderer : GLSurfaceView.Renderer {
         GLES20.glUniform3f(uColor, r, g, b)
         GLES20.glUniform1f(uLight, light)
         GLES20.glUniform1f(uGrid, grid)
+        GLES20.glUniform1f(uUseTex, if (curTex != 0) 1f else 0f)
         GLES20.glDrawArrays(mode, 0, count)
+    }
+
+    private fun pot(v: Int): Int {
+        var n = 1
+        while (n < v && n < 1024) n *= 2
+        return n
+    }
+
+    private fun upload(src: Bitmap): Int {
+        val w = pot(src.width)
+        val h = pot(src.height)
+        val bmp = if (w == src.width && h == src.height) src else Bitmap.createScaledBitmap(src, w, h, true)
+        val ids = IntArray(1)
+        GLES20.glGenTextures(1, ids, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0])
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR_MIPMAP_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_REPEAT)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_REPEAT)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+        GLES20.glGenerateMipmap(GLES20.GL_TEXTURE_2D)
+        return ids[0]
+    }
+
+    // textura de uma Part: 0 enquanto ainda está baixando
+    private fun texFor(src: String): Int {
+        val id = texIds[src]
+        if (id != null) return id
+        if (texAsked.add(src)) {
+            Assets.image(src) { bmp -> if (bmp != null) texPending[src] = bmp }
+        }
+        return 0
     }
 
     private fun handleModel(h: Editor.Handle) {
@@ -216,19 +296,37 @@ class Renderer : GLSurfaceView.Renderer {
         } else {
             lastNs = System.nanoTime()
         }
+        if (texPending.isNotEmpty()) {
+            for (k in texPending.keys.toList()) {
+                val b = texPending.remove(k) ?: continue
+                texIds[k] = upload(b)
+            }
+        }
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         val e = Cam.eye()
         Matrix.setLookAtM(view, 0, e[0], e[1], e[2], Cam.target[0], Cam.target[1], Cam.target[2], 0f, 1f, 0f)
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
+        synchronized(snap) { System.arraycopy(vp, 0, snap, 0, 16) }
         GLES20.glUseProgram(prog)
         GLES20.glUniformMatrix4fv(uVP, 1, false, vp, 0)
 
         use(cube)
         for (p in Scene.parts) {
+            val ts = p.props["Texture"] ?: p.props["TextureID"]
+            var tid = 0
+            if (!ts.isNullOrEmpty()) tid = texFor(ts)
+            if (tid != 0) {
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tid)
+                GLES20.glUniform3f(uHalf, p.sx * 0.5f, p.sy * 0.5f, p.sz * 0.5f)
+                GLES20.glUniform1f(uTile, p.props["StudsPerTile"]?.toFloatOrNull() ?: 0f)
+            }
+            curTex = tid
             p.model(model)
             draw(model, p.r, p.g, p.b, 1f, if (p.grid) 1f else 0f, GLES20.GL_TRIANGLES, 36)
         }
+        curTex = 0
 
         if (Play.active) {
             drawAvatar()
