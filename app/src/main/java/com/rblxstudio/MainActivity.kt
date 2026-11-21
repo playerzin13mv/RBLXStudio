@@ -336,7 +336,7 @@ class MainActivity : Activity() {
         refreshAccount()
         if (RobloxAuth.loggedIn(this)) {
             RobloxAuth.loadAvatar(this) { refreshAccount() }
-            Avatar.load(this)
+            Avatar.load(this) { toast(it) }
         }
         handleIntent(intent)
     }
@@ -362,7 +362,7 @@ class MainActivity : Activity() {
                 refreshAccount()
                 if (ok) {
                     RobloxAuth.loadAvatar(this) { refreshAccount() }
-                    Avatar.load(this)
+                    Avatar.load(this) { toast(it) }
                 }
             }
         }
@@ -770,11 +770,17 @@ class MainActivity : Activity() {
                     refreshAccount()
                     if (ok) {
                         RobloxAuth.loadAvatar(this) { refreshAccount() }
-                        Avatar.load(this)
+                        Avatar.load(this) { toast(it) }
                     }
                 }
             }
-            .setNeutralButton("Avançado (OAuth)") { _, _ -> oauthDialog() }
+            .setNeutralButton("Pelo site do Roblox") { _, _ ->
+                if (RobloxAuth.clientId(this).isEmpty()) {
+                    oauthDialog()
+                } else {
+                    try { RobloxAuth.begin(this) } catch (e: Exception) { toast("Não consegui abrir o navegador") }
+                }
+            }
             .setNegativeButton("Cancelar", null)
             .show()
     }

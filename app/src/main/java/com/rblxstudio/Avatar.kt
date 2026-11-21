@@ -3,6 +3,8 @@ package com.rblxstudio
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Handler
+import android.os.Looper
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -33,6 +35,11 @@ object Avatar {
     // sobe a cada mudança; o Renderer reenvia as texturas quando muda
     @Volatile var version = 0
 
+    // resumo da última carga, para mostrar na tela
+    @Volatile var status = ""
+    private val errors = ArrayList<String>()
+    private val ui = Handler(Looper.getMainLooper())
+
     private val bricks = mapOf(
         1 to 0xF2F3F3, 5 to 0xD7C59A, 9 to 0xE8BAC8, 11 to 0x80BBDC, 18 to 0xCC8E69, 21 to 0xC4281C,
         23 to 0x0D69AC, 24 to 0xF5CD30, 26 to 0x1B2A35, 28 to 0x287F47, 37 to 0x4B974B, 38 to 0xA05F35,
@@ -58,17 +65,25 @@ object Avatar {
         version++
     }
 
-    fun load(ctx: Context) {
+    fun load(ctx: Context, onDone: ((String) -> Unit)? = null) {
         val id = RobloxAuth.userId(ctx)
         if (id.isEmpty()) return
         Thread {
+            errors.clear()
             try {
                 val o = JSONObject(Assets.httpGet("https://avatar.roblox.com/v1/users/" + id + "/avatar"))
                 loadColors(o)
                 loadWearing(o)
             } catch (e: Exception) {
-                Out.add("Avatar: não consegui carregar (" + (e.message ?: e.javaClass.simpleName) + ")", 1)
+                errors.add("avatar: " + (e.message ?: e.javaClass.simpleName))
             }
+            var s = "Avatar: " + (if (shirt != null) "camisa OK" else "sem camisa") + ", " +
+                (if (pants != null) "calça OK" else "sem calça") + ", " +
+                (if (tshirt != null) "camiseta OK" else "sem camiseta") + ", " + accs.size + " acessório(s)"
+            if (errors.isNotEmpty()) s += "\nFalhou: " + errors.first().take(120) + " (" + errors.size + " erro(s))"
+            status = s
+            Out.add(s, if (errors.isEmpty()) 0 else 1)
+            if (onDone != null) ui.post { onDone(s) }
         }.start()
     }
 
@@ -131,7 +146,7 @@ object Avatar {
                     }
                 }
             } catch (e: Exception) {
-                Out.add("Avatar: falhou o item " + aid + " (" + (e.message ?: e.javaClass.simpleName) + ")", 1)
+                errors.add("item " + aid + ": " + (e.message ?: e.javaClass.simpleName))
             }
         }
         accs = ArrayList(accList)
@@ -146,6 +161,7 @@ object Avatar {
             c.connectTimeout = 12000
             c.readTimeout = 20000
             c.instanceFollowRedirects = false
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) RBLXStudio/0.8")
             try {
                 val code = c.responseCode
                 if (code in 300..399) {
@@ -162,7 +178,38 @@ object Avatar {
         throw Exception("redirects demais")
     }
 
-    private fun asset(id: Long): ByteArray = bytes("https://assetdelivery.roblox.com/v1/asset/?id=" + id)
+    // tenta a API nova (v2 devolve o link do CDN) e cai para a antiga (v1)
+    private fun asset(id: Long): ByteArray {
+        var err: Exception? = null
+        try {
+            val c = URL("https://assetdelivery.roblox.com/v2/assetId/" + id).openConnection() as HttpURLConnection
+            c.connectTimeout = 12000
+            c.readTimeout = 20000
+            c.setRequestProperty("Accept", "application/json")
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) RBLXStudio/0.8")
+            try {
+                if (c.responseCode in 200..299) {
+                    val j = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                    val locs = j.optJSONArray("locations")
+                    if (locs != null && locs.length() > 0) {
+                        val loc = locs.getJSONObject(0).optString("location", "")
+                        if (loc.isNotEmpty()) return bytes(loc)
+                    }
+                } else {
+                    err = Exception("v2 HTTP " + c.responseCode)
+                }
+            } finally {
+                c.disconnect()
+            }
+        } catch (e: Exception) {
+            err = e
+        }
+        try {
+            return bytes("https://assetdelivery.roblox.com/v1/asset/?id=" + id)
+        } catch (e: Exception) {
+            throw Exception((err?.message ?: "sem resposta") + " / " + (e.message ?: e.javaClass.simpleName))
+        }
+    }
 
     // Procura IDs de imagem/malha dentro do arquivo do item (XML ou rbxm binário)
     private fun refs(raw: ByteArray): List<Long> {
@@ -196,6 +243,7 @@ object Avatar {
             val bmp = decodeBmp(asset(r))
             if (bmp != null) return bmp
         }
+        errors.add("roupa " + itemId + ": imagem não encontrada")
         return null
     }
 
@@ -217,7 +265,7 @@ object Avatar {
             }
         }
         val m = mesh ?: run {
-            Out.add("Acessório \"" + name + "\": formato de malha ainda não suportado", 1)
+            errors.add("acessório " + name + ": malha não suportada")
             return null
         }
         return Acc(name, kind, m.data, m.min, m.max, tex)

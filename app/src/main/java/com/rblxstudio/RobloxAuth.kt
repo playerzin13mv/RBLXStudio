@@ -35,7 +35,13 @@ object RobloxAuth {
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun clientId(c: Context): String = prefs(c).getString("client_id", "") ?: ""
+    // se você registrar o app UMA vez, cole o Client ID aqui e ninguém mais precisa configurar nada
+    const val DEFAULT_CLIENT_ID = ""
+
+    fun clientId(c: Context): String {
+        val v = prefs(c).getString("client_id", "") ?: ""
+        return if (v.isNotEmpty()) v else DEFAULT_CLIENT_ID
+    }
     fun clientSecret(c: Context): String = prefs(c).getString("client_secret", "") ?: ""
 
     fun saveClient(c: Context, id: String, secret: String) {
