@@ -108,6 +108,108 @@ object RobloxAuth {
         }
     }
 
+
+    // ---------- login rápido: só o nome de usuário (ou ID), sem criar app ----------
+    private fun postJson(url: String, json: String): Pair<Int, String> {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15000
+            conn.readTimeout = 15000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.use { it.write(json.toByteArray()) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            return Pair(code, stream?.bufferedReader()?.use { it.readText() } ?: "")
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun plainGet(url: String): Pair<Int, String> {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 15000
+            conn.readTimeout = 15000
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            return Pair(code, stream?.bufferedReader()?.use { it.readText() } ?: "")
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    // aceita "NomeDeUsuario", "@NomeDeUsuario" ou o ID numérico
+    fun quickLogin(ctx: Context, input: String, done: (Boolean, String) -> Unit) {
+        val q = input.trim().removePrefix("@")
+        if (q.isEmpty()) { done(false, "Digite seu usuário do Roblox"); return }
+        val app = ctx.applicationContext
+        Thread {
+            var ok = false
+            var msg = ""
+            try {
+                var id = ""
+                var name = ""
+                var display = ""
+                if (q.all { it.isDigit() }) {
+                    val (c, t) = plainGet("https://users.roblox.com/v1/users/" + q)
+                    if (c in 200..299) {
+                        val u = JSONObject(t)
+                        id = u.optLong("id", 0L).toString()
+                        name = u.optString("name", "")
+                        display = u.optString("displayName", name)
+                    }
+                }
+                if (id.isEmpty() || id == "0") {
+                    val body = JSONObject()
+                    body.put("usernames", org.json.JSONArray().put(q))
+                    body.put("excludeBannedUsers", true)
+                    val (c, t) = postJson("https://users.roblox.com/v1/usernames/users", body.toString())
+                    if (c in 200..299) {
+                        val arr = JSONObject(t).optJSONArray("data")
+                        if (arr != null && arr.length() > 0) {
+                            val u = arr.getJSONObject(0)
+                            id = u.optLong("id", 0L).toString()
+                            name = u.optString("name", q)
+                            display = u.optString("displayName", name)
+                        }
+                    } else {
+                        msg = "Roblox não respondeu (" + c + ")"
+                    }
+                }
+                if (id.isEmpty() || id == "0") {
+                    if (msg.isEmpty()) msg = "Usuário não encontrado"
+                } else {
+                    prefs(app).edit()
+                        .putString("sub", id)
+                        .putString("nickname", display.ifEmpty { name })
+                        .putString("username", name)
+                        .putString("picture", "")
+                        .apply()
+                    ok = true
+                    msg = "Logado como " + display.ifEmpty { name }
+                }
+            } catch (e: Exception) {
+                msg = "Erro de rede: " + (e.message ?: e.javaClass.simpleName)
+            }
+            main.post { done(ok, msg) }
+        }.start()
+    }
+
+    // foto de perfil pública (rosto do avatar) pelo ID do usuário
+    private fun headshotUrl(ctx: Context): String {
+        val saved = prefs(ctx).getString("picture", "") ?: ""
+        if (saved.isNotEmpty()) return saved
+        val id = userId(ctx)
+        if (id.isEmpty()) return ""
+        val (c, t) = plainGet("https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=" + id +
+            "&size=150x150&format=Png&isCircular=false")
+        if (c !in 200..299) return ""
+        val arr = JSONObject(t).optJSONArray("data") ?: return ""
+        return if (arr.length() > 0) arr.getJSONObject(0).optString("imageUrl", "") else ""
+    }
+
     // chamado quando o navegador volta para rblxstudio://oauth?code=...&state=...
     fun finish(ctx: Context, data: Uri, done: (Boolean, String) -> Unit) {
         val err = data.getQueryParameter("error")
@@ -171,10 +273,11 @@ object RobloxAuth {
 
     // baixa a foto do perfil (em segundo plano) e deixa redonda
     fun loadAvatar(ctx: Context, onReady: (() -> Unit)? = null) {
-        val url = prefs(ctx).getString("picture", "") ?: ""
-        if (url.isEmpty()) return
+        val app = ctx.applicationContext
         Thread {
             try {
+                val url = headshotUrl(app)
+                if (url.isEmpty()) return@Thread
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.connectTimeout = 10000
                 conn.readTimeout = 10000

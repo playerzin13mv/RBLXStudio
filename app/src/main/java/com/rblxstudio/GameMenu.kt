@@ -156,7 +156,7 @@ class GameMenu(private val act: Activity) : FrameLayout(act) {
         label("Shift Lock")
         choice(listOf("Ligado", "Desligado"), if (Settings.shiftLockSwitch) 0 else 1) {
             Settings.shiftLockSwitch = it == 0
-            if (!Settings.shiftLockSwitch) Play.setShiftLock(false)
+            if (!Settings.shiftLockSwitch) Play.applyShiftLock(false)
         }
         label("Modo da câmera")
         choice(listOf("Seguir", "Clássica"), Settings.camMode) { Settings.camMode = it }

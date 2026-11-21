@@ -189,7 +189,7 @@ object Play {
         synchronized(lock) { if (active && !dead) die() }
     }
 
-    fun setShiftLock(on: Boolean) {
+    fun applyShiftLock(on: Boolean) {
         shiftLock = on
         Cam.shoulder = if (on) 1.75f else 0f
     }

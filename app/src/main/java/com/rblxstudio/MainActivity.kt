@@ -393,7 +393,7 @@ class MainActivity : Activity() {
     // aplica as configurações do menu (movimento, Shift Lock)
     private fun applyControls() {
         hud.mode = Settings.moveMode
-        if (!Settings.shiftLockSwitch && Play.shiftLock) Play.setShiftLock(false)
+        if (!Settings.shiftLockSwitch && Play.shiftLock) Play.applyShiftLock(false)
         if (joyId != -1) {
             Play.moveX = 0f; Play.moveY = 0f
             joyId = -1
@@ -462,7 +462,7 @@ class MainActivity : Activity() {
                     hud.jumpDown = true
                 } else if (Settings.shiftLockSwitch && hypot(x - hud.shiftX(), y - hud.shiftY()) < 38f * d) {
                     shiftId = id
-                    Play.setShiftLock(!Play.shiftLock)
+                    Play.applyShiftLock(!Play.shiftLock)
                 } else if (Settings.moveMode == Settings.MOVE_DPAD && joyId == -1 &&
                     hypot(x - hud.dpadX(), y - hud.dpadY()) < 110f * d) {
                     joyId = id
@@ -752,6 +752,34 @@ class MainActivity : Activity() {
     }
 
     private fun loginDialog() {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(tv("Digite seu usuário do Roblox (ou o ID) para carregar seu avatar, roupas e acessórios. Não precisa de senha.", 12f, C_TEXT), lp(MATCH, WRAP))
+        val et = styledEdit("Usuário do Roblox", "", false)
+        et.textSize = 14f
+        et.setText(RobloxAuth.username(this))
+        box.addView(et, lp(MATCH, WRAP))
+        AlertDialog.Builder(this)
+            .setTitle("Entrar")
+            .setView(box)
+            .setPositiveButton("Entrar") { _, _ ->
+                toast("Procurando usuário...")
+                RobloxAuth.quickLogin(this, et.text.toString()) { ok, msg ->
+                    toast(msg)
+                    refreshAccount()
+                    if (ok) {
+                        RobloxAuth.loadAvatar(this) { refreshAccount() }
+                        Avatar.load(this)
+                    }
+                }
+            }
+            .setNeutralButton("Avançado (OAuth)") { _, _ -> oauthDialog() }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun oauthDialog() {
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
         box.setPadding(dp(20), dp(8), dp(20), 0)
