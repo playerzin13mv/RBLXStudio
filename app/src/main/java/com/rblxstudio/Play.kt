@@ -175,6 +175,35 @@ object Play {
         }
     }
 
+    private fun computeSpawn(here: Boolean) {
+        if (here) {
+            val px = Cam.target[0]
+            val pz = Cam.target[2]
+            val ty = Cam.target[1]
+            var top = -1e9f
+            var topAny = -1e9f
+            for (p in Scene.parts) {
+                if (!p.canCollide) continue
+                if (abs(px - p.x) < p.halfExtent(0) && abs(pz - p.z) < p.halfExtent(2)) {
+                    val t = p.y + p.halfExtent(1)
+                    if (t > topAny) topAny = t
+                    if (t <= ty + 20f && t > top) top = t
+                }
+            }
+            val base = if (top > -1e8f) top else if (topAny > -1e8f) topAny else 0f
+            spawnX = px; spawnY = base + HY + 3f; spawnZ = pz
+            return
+        }
+        val sp = Scene.parts.firstOrNull { it.name == "SpawnLocation" }
+        if (sp != null) {
+            spawnX = sp.x
+            spawnY = sp.y + sp.halfExtent(1) + HY + 0.5f
+            spawnZ = sp.z
+        } else {
+            spawnX = 0f; spawnY = HY + 3f; spawnZ = 0f
+        }
+    }
+
     private fun respawn() {
         x = spawnX; y = spawnY; z = spawnZ
         vy = 0f
