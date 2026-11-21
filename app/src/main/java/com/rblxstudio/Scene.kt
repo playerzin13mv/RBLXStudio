@@ -28,13 +28,21 @@ class PartData(
     var anchored: Boolean = false
 ) {
     var grid = false
+    var canCollide = true
+    var vy = 0f // velocidade vertical (só usada durante o Play)
     val rot = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
 
     fun copyPart(): PartData {
         val p = PartData(name, x, y, z, sx, sy, sz, r, g, b, anchored)
+        p.grid = grid
+        p.canCollide = canCollide
         System.arraycopy(rot, 0, p.rot, 0, 16)
         return p
     }
+
+    // meia-extensão da caixa no eixo k do mundo (considera a rotação)
+    fun halfExtent(k: Int): Float =
+        abs(rot[k]) * sx / 2 + abs(rot[4 + k]) * sy / 2 + abs(rot[8 + k]) * sz / 2
 
     fun size(i: Int) = when (i) {
         0 -> sx

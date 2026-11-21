@@ -32,6 +32,7 @@ class Renderer : GLSurfaceView.Renderer {
     private lateinit var ring: FloatBuffer
     private var ringCount = 0
     private val yellow = floatArrayOf(1f, 0.9f, 0.2f)
+    private var lastNs = 0L
 
     private fun cross(a: FloatArray, b: FloatArray) = floatArrayOf(
         a[1] * b[2] - a[2] * b[1],
@@ -175,7 +176,45 @@ class Renderer : GLSurfaceView.Renderer {
         Matrix.scaleM(model, 0, rad, rad, rad)
     }
 
+    // desenha uma caixa do personagem, relativa ao centro dele e girada para onde ele olha
+    private fun body(ox: Float, oy: Float, oz: Float, hx: Float, hy: Float, hz: Float, col: Int,
+                     ang: Float = 0f, pivotY: Float = oy) {
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, Play.x, Play.y, Play.z)
+        Matrix.rotateM(model, 0, Play.facing, 0f, 1f, 0f)
+        Matrix.translateM(model, 0, ox, pivotY, oz)
+        if (ang != 0f) Matrix.rotateM(model, 0, ang, 1f, 0f, 0f)
+        Matrix.translateM(model, 0, 0f, oy - pivotY, 0f)
+        Matrix.scaleM(model, 0, hx, hy, hz)
+        draw(model, ((col shr 16) and 255) / 255f, ((col shr 8) and 255) / 255f, (col and 255) / 255f,
+            1f, 0f, GLES20.GL_TRIANGLES, 36)
+    }
+
+    private fun drawAvatar() {
+        use(cube)
+        val swing = if (Play.moving) sin(Play.walkT * 11f) * 45f else 0f
+        val skin = 0xF5CD30
+        body(0f, 0.5f, 0f, 1f, 1f, 0.5f, 0x0D69AC)                          // torso
+        body(0f, 1.9f, 0f, 0.6f, 0.6f, 0.6f, skin)                         // cabeça
+        body(-0.22f, 2.0f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)            // olhos
+        body(0.22f, 2.0f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
+        body(-1.5f, 0.5f, 0f, 0.5f, 1f, 0.5f, skin, swing, 1.5f)           // braços
+        body(1.5f, 0.5f, 0f, 0.5f, 1f, 0.5f, skin, -swing, 1.5f)
+        body(-0.5f, -1.5f, 0f, 0.5f, 1f, 0.5f, 0x4B974B, -swing, -0.5f)    // pernas
+        body(0.5f, -1.5f, 0f, 0.5f, 1f, 0.5f, 0x4B974B, swing, -0.5f)
+    }
+
     override fun onDrawFrame(gl: GL10?) {
+        if (Play.active) {
+            val now = System.nanoTime()
+            var dt = (now - lastNs) / 1.0e9f
+            if (dt > 0.05f) dt = 0.05f
+            if (dt < 0f) dt = 0f
+            lastNs = now
+            Play.update(dt)
+        } else {
+            lastNs = System.nanoTime()
+        }
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         val e = Cam.eye()
@@ -188,6 +227,11 @@ class Renderer : GLSurfaceView.Renderer {
         for (p in Scene.parts) {
             p.model(model)
             draw(model, p.r, p.g, p.b, 1f, if (p.grid) 1f else 0f, GLES20.GL_TRIANGLES, 36)
+        }
+
+        if (Play.active) {
+            drawAvatar()
+            return
         }
 
         val sel = Scene.selected ?: return

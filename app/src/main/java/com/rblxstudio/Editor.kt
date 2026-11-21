@@ -30,6 +30,7 @@ object Editor {
     private var a0 = 0f
     private var startPos = v3(0f, 0f, 0f)
     private var startSize = 0f
+    private var dragChanged = false
     private val startRot = FloatArray(16)
 
     class Handle(val axis: Int, val sign: Float, val center: FloatArray, val ori: FloatArray?, val half: FloatArray)
@@ -94,6 +95,7 @@ object Editor {
     }
 
     fun grab(x: Float, y: Float): Boolean {
+        if (Play.active) return false
         val p = Scene.selected ?: return false
         if (tool == Tool.SELECT) return false
         val ray = Cam.ray(x, y)
@@ -120,6 +122,8 @@ object Editor {
             a0 = angleOf(sub3(bestHit, c), best)
             System.arraycopy(p.rot, 0, startRot, 0, 16)
             activeHandle = best * 2
+            History.checkpoint()
+            dragChanged = false
             return true
         }
         var bestT = Float.MAX_VALUE
@@ -141,6 +145,8 @@ object Editor {
         s0 = axisParam(o, d, c, dragDir)
         if (s0.isNaN()) return false
         activeHandle = h.axis * 2 + (if (h.sign > 0f) 0 else 1)
+        History.checkpoint()
+        dragChanged = false
         return true
     }
 
@@ -182,10 +188,14 @@ object Editor {
                 p.z = startPos[2] + dragDir[2] * ad / 2
             }
         }
+        dragChanged = true
         onChanged?.invoke(false)
     }
 
-    fun release() { activeHandle = -1 }
+    fun release() {
+        if (activeHandle >= 0 && !dragChanged) History.dropLast()
+        activeHandle = -1
+    }
 
     fun pick(x: Float, y: Float): PartData? {
         val ray = Cam.ray(x, y)
@@ -201,7 +211,9 @@ object Editor {
         return best
     }
 
-    fun tap(x: Float, y: Float) = select(pick(x, y))
+    fun tap(x: Float, y: Float) {
+        if (!Play.active) select(pick(x, y))
+    }
 
     fun select(p: PartData?) {
         Scene.selected = p
@@ -209,6 +221,8 @@ object Editor {
     }
 
     fun addPart() {
+        if (Play.active) return
+        History.checkpoint()
         val ray = Cam.ray(Cam.w / 2f, Cam.h / 2f)
         val hit = rayPlane(ray[0], ray[1], v3(0f, 0f, 0f), v3(0f, 1f, 0f))
         val px = if (hit != null) hit[0].roundToInt().toFloat() else 0f
@@ -226,14 +240,18 @@ object Editor {
     }
 
     fun paste() {
+        if (Play.active) return
         val c = Scene.clipboard ?: return
+        History.checkpoint()
         val p = c.copyPart()
         Scene.parts.add(p)
         select(p)
     }
 
     fun duplicate() {
+        if (Play.active) return
         val s = Scene.selected ?: return
+        History.checkpoint()
         val p = s.copyPart()
         p.x += 2f
         Scene.parts.add(p)
@@ -241,13 +259,17 @@ object Editor {
     }
 
     fun delete() {
+        if (Play.active) return
         val s = Scene.selected ?: return
+        History.checkpoint()
         Scene.parts.remove(s)
         select(null)
     }
 
     fun setColor(r: Float, g: Float, b: Float) {
+        if (Play.active) return
         val s = Scene.selected ?: return
+        History.checkpoint()
         s.r = r
         s.g = g
         s.b = b
@@ -255,8 +277,74 @@ object Editor {
     }
 
     fun toggleAnchor() {
+        if (Play.active) return
         val s = Scene.selected ?: return
+        History.checkpoint()
         s.anchored = !s.anchored
         onChanged?.invoke(false)
+    }
+
+    fun undo() {
+        if (Play.active) return
+        if (History.undo()) onChanged?.invoke(true)
+    }
+
+    fun redo() {
+        if (Play.active) return
+        if (History.redo()) onChanged?.invoke(true)
+    }
+
+    fun focus() {
+        val s = Scene.selected ?: return
+        Cam.target[0] = s.x
+        Cam.target[1] = s.y
+        Cam.target[2] = s.z
+        Cam.dist = max(radius(s) * 2.5f, 12f).coerceAtMost(400f)
+    }
+}
+
+class Snap(val parts: List<PartData>, val sel: Int)
+
+// histórico de desfazer/refazer: guarda cópias da cena inteira
+object History {
+    private val undoStack = ArrayList<Snap>()
+    private val redoStack = ArrayList<Snap>()
+
+    private fun take() = Snap(Scene.parts.map { it.copyPart() }, Scene.parts.indexOf(Scene.selected))
+
+    private fun apply(s: Snap) {
+        Scene.parts.clear()
+        Scene.parts.addAll(s.parts.map { it.copyPart() })
+        Scene.selected = Scene.parts.getOrNull(s.sel)
+    }
+
+    // chamar ANTES de alterar a cena
+    fun checkpoint() {
+        undoStack.add(take())
+        if (undoStack.size > 100) undoStack.removeAt(0)
+        redoStack.clear()
+    }
+
+    fun dropLast() {
+        if (undoStack.isNotEmpty()) undoStack.removeAt(undoStack.size - 1)
+    }
+
+    fun undo(): Boolean {
+        if (undoStack.isEmpty()) return false
+        redoStack.add(take())
+        apply(undoStack.removeAt(undoStack.size - 1))
+        return true
+    }
+
+    fun redo(): Boolean {
+        if (redoStack.isEmpty()) return false
+        undoStack.add(take())
+        apply(redoStack.removeAt(redoStack.size - 1))
+        return true
+    }
+
+    fun clear() {
+        undoStack.clear()
+        redoStack.clear()
     }
 }
