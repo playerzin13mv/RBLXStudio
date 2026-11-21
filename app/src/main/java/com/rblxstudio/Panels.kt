@@ -20,7 +20,7 @@ internal val serviceIcons = mapOf(
     "ServerScriptService" to R.drawable.ic_script, "ServerStorage" to R.drawable.ic_storage,
     "StarterGui" to R.drawable.ic_ui, "StarterPack" to R.drawable.ic_toolbox,
     "StarterPlayer" to R.drawable.ic_player, "Teams" to R.drawable.ic_flag,
-    "SoundService" to R.drawable.ic_volume
+    "SoundService" to R.drawable.ic_volume, "Chat" to R.drawable.ic_chat
 )
 
 // ---------- painéis ----------
@@ -73,7 +73,10 @@ internal fun MainActivity.makePanel(
 
 internal fun iconFor(i: Inst): Int = when {
     i is PartData -> R.drawable.ic_part
-    i.className == "Script" || i.className == "LocalScript" -> R.drawable.ic_script
+    i.className == "Script" || i.className == "LocalScript" || i.className == "StarterPlayerScripts" -> R.drawable.ic_script
+    i.className == "StarterCharacterScripts" -> R.drawable.ic_player
+    i.className == "Folder" || i.className == "Model" -> R.drawable.ic_group
+    i.className.endsWith("Value") -> R.drawable.ic_properties
     i.className == "Sound" -> R.drawable.ic_volume
     Defaults.isGui(i.className) || i.className == "PlayerGui" -> R.drawable.ic_ui
     i.className == "Player" || i.className == "Humanoid" -> R.drawable.ic_player
@@ -118,7 +121,7 @@ internal fun MainActivity.buildExplorer() {
         explorerList.addView(r, lp(MATCH, WRAP))
     }
 
-    fun tint(i: Inst): Int? = if (i is PartData) null else C_DIM
+    fun tint(i: Inst): Int? = if (i is PartData) null else iconColor(i)
     fun isScript(i: Inst) = i.className == "Script" || i.className == "LocalScript"
 
     fun node(i: Inst, depth: Int) {

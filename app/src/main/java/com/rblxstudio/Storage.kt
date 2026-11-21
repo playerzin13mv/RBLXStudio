@@ -121,6 +121,7 @@ object Storage {
                 for (k in 0 until a.length()) s.add(instFrom(a.getJSONObject(k)))
             }
         }
+        Scene.ensureStarter()
     }
 
     fun save(ctx: Context, name: String): String {

@@ -96,6 +96,10 @@ object Play {
             ch.add(CharInst("Part", "HumanoidRootPart"))
             ch.add(CharInst("Humanoid", "Humanoid"))
             ch.add(CharInst("Part", "Head"))
+            for (n in listOf("Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg")) ch.add(CharInst("Part", n))
+            for (c in Scene.service("StarterPlayer").children) {
+                if (c.className == "StarterCharacterScripts") for (k in c.children) ch.add(k.cloneTree())
+            }
             ch.parent = Scene.workspace
             val gui = Inst("PlayerGui", "PlayerGui")
             for (c in Scene.service("StarterGui").children) gui.add(c.cloneTree())
@@ -233,30 +237,44 @@ object Play {
         deadT = 0f
         health = 0f
         tapOn = false
+        val pvx = if (moving) moveDirX * walkSpeed else 0f
+        val pvz = if (moving) moveDirZ * walkSpeed else 0f
+        val pvy = vy
         moveX = 0f; moveY = 0f
         frags.clear()
         val rnd = java.util.Random()
         val fr = Math.toRadians(facing.toDouble())
         val cf = cos(fr).toFloat()
         val sf = sin(fr).toFloat()
+        // Roblox: as juntas se quebram e cada peça vira um objeto físico que continua com a
+        // velocidade do personagem e desaba pela gravidade (sem explosão)
         for (i in 0..5) {
             val o = PART_OFF[i]
             val h = PART_HALF[i]
-            // posição no mundo (gira junto com o personagem)
             val wx = x + o[0] * cf + o[2] * sf
             val wz = z - o[0] * sf + o[2] * cf
             val f = Frag(wx, y + o[1], wz,
-                (wx - x) * 5f + (rnd.nextFloat() - 0.5f) * 14f,
-                18f + rnd.nextFloat() * 22f,
-                (wz - z) * 5f + (rnd.nextFloat() - 0.5f) * 14f,
+                pvx + (wx - x) * 0.8f + (rnd.nextFloat() - 0.5f) * 3f,
+                pvy + (rnd.nextFloat() - 0.2f) * 3f,
+                pvz + (wz - z) * 0.8f + (rnd.nextFloat() - 0.5f) * 3f,
                 h[0], h[1], h[2], i)
-            f.wx = (rnd.nextFloat() - 0.5f) * 520f
-            f.wy = (rnd.nextFloat() - 0.5f) * 520f
-            f.wz = (rnd.nextFloat() - 0.5f) * 520f
+            f.wx = (rnd.nextFloat() - 0.5f) * 140f
+            f.wy = (rnd.nextFloat() - 0.5f) * 90f
+            f.wz = (rnd.nextFloat() - 0.5f) * 140f
             f.rx = 0f; f.ry = facing
             frags.add(f)
         }
         Lua.died()
+    }
+
+    // meia altura da peça já girada (para ela pousar certo no chão)
+    private val fm = FloatArray(16)
+    private fun halfY(f: Frag): Float {
+        android.opengl.Matrix.setIdentityM(fm, 0)
+        android.opengl.Matrix.rotateM(fm, 0, f.ry, 0f, 1f, 0f)
+        android.opengl.Matrix.rotateM(fm, 0, f.rx, 1f, 0f, 0f)
+        android.opengl.Matrix.rotateM(fm, 0, f.rz, 0f, 0f, 1f)
+        return abs(fm[1]) * f.hx + abs(fm[5]) * f.hy + abs(fm[9]) * f.hz
     }
 
     private fun stepFrags(dt: Float) {
@@ -265,34 +283,47 @@ object Play {
             if (f.rest) continue
             f.vy -= GRAVITY * dt
             if (f.vy < -300f) f.vy = -300f
-            val oldBottom = f.py - f.hy
+            val oldBottom = f.py - halfY(f)
             f.px += f.vx * dt
             f.py += f.vy * dt
             f.pz += f.vz * dt
             f.rx += f.wx * dt
             f.ry += f.wy * dt
             f.rz += f.wz * dt
+            val hyE = halfY(f)
             val r = maxOf(f.hx, f.hz)
+            var ground = false
             for (b in boxes) {
                 if (f.px + r <= b.min(0) || f.px - r >= b.max(0)) continue
                 if (f.pz + r <= b.min(2) || f.pz - r >= b.max(2)) continue
                 val top = b.max(1)
-                val bottom = f.py - f.hy
+                val bottom = f.py - hyE
                 if (f.vy <= 0f && bottom <= top && oldBottom >= top - 1.5f) {
-                    f.py = top + f.hy
-                    f.vy = -f.vy * 0.25f
-                    f.vx *= 0.7f
-                    f.vz *= 0.7f
-                    f.wx *= 0.6f; f.wy *= 0.6f; f.wz *= 0.6f
-                    if (Math.abs(f.vy) < 4f) {
-                        f.vy = 0f; f.vx = 0f; f.vz = 0f
-                        f.wx = 0f; f.wy = 0f; f.wz = 0f
+                    f.py = top + hyE
+                    f.vy = if (f.vy < -10f) -f.vy * 0.12f else 0f
+                    val fr = 1f - minOf(1f, dt * 7f)
+                    f.vx *= fr; f.vz *= fr
+                    ground = true
+                    // a peça tomba e deita numa de suas faces (múltiplos de 90°)
+                    val k = minOf(1f, dt * 9f)
+                    val sx = Math.round(f.rx / 90f) * 90f
+                    val sz = Math.round(f.rz / 90f) * 90f
+                    f.rx += (sx - f.rx) * k
+                    f.rz += (sz - f.rz) * k
+                    f.wx *= (1f - k); f.wz *= (1f - k)
+                    f.wy *= (1f - minOf(1f, dt * 4f))
+                    f.py = top + halfY(f)
+                    if (abs(f.vx) < 0.6f && abs(f.vz) < 0.6f && f.vy == 0f && abs(f.wy) < 6f &&
+                        abs(sx - f.rx) < 1.5f && abs(sz - f.rz) < 1.5f) {
+                        f.rx = sx; f.rz = sz
+                        f.py = top + halfY(f)
+                        f.vx = 0f; f.vz = 0f; f.wx = 0f; f.wy = 0f; f.wz = 0f
                         f.rest = true
                     }
                     break
                 }
             }
-            if (f.py < -500f) f.rest = true
+            if (!ground && f.py < -500f) f.rest = true
         }
     }
 

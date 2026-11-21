@@ -9,6 +9,14 @@ Versão do Roblox Studio para celular (Android), feita em Kotlin + OpenGL ES.
 - Ícones vetoriais no lugar dos emojis e ícone do app (logo do Roblox Studio)
 - **Login com conta do Roblox** (OAuth 2.0 + PKCE)
 
+## Novidades da v0.10
+- Morte estilo Roblox: as 6 peças se soltam, mantêm a velocidade do personagem, caem pela gravidade, tombam e deitam no chão (sem explosão). Cair no void só renasce.
+- Todos os menus do Editor (login, inserir objeto, File, cor, salvar...) com visual novo no estilo do Editor; ícones coloridos no Explorer e no menu de inserir.
+- Login: relatório completo do avatar (cada item, tipo e resultado), também em "Ver avatar" no menu da conta.
+- Explorer: StarterPlayerScripts e StarterCharacterScripts dentro de StarterPlayer, serviço Chat, e novas classes Model, StringValue, NumberValue e BoolValue.
+- Personagem com Torso, Left/Right Arm e Left/Right Leg para scripts.
+- Sound: o ID agora é convertido no link do áudio pela API nova do Roblox.
+
 ## Novidades da v0.9
 - Avatar: busca os itens por 3 caminhos (avatar v1, v2 e currently-wearing), carrega camisa, calça, camiseta, rosto, cabeça de malha e acessórios (malhas v2, v3 e v4). O aviso depois do login mostra o que foi carregado e o que falhou.
 - Câmera: dá para olhar para cima, pinça para zoom (bem perto vira primeira pessoa) e opção "Primeira pessoa" no menu do jogo.

@@ -138,7 +138,7 @@ class PartData(
 
 // classes que dá para inserir e as propriedades editáveis de cada uma
 object Defaults {
-    val classes = listOf("Script", "LocalScript", "Sound", "ScreenGui", "Frame", "TextLabel", "TextButton", "ImageLabel", "Folder")
+    val classes = listOf("Script", "LocalScript", "Sound", "ScreenGui", "Frame", "TextLabel", "TextButton", "ImageLabel", "Folder", "Model", "StringValue", "NumberValue", "BoolValue")
     private val guiClasses = setOf("ScreenGui", "Frame", "TextLabel", "TextButton", "ImageLabel")
     val boolKeys = setOf("Visible", "Enabled", "Looped", "Playing")
     private val base = listOf("Position", "Size", "AnchorPoint", "BackgroundColor3", "BackgroundTransparency", "Visible")
@@ -153,6 +153,7 @@ object Defaults {
         "TextLabel", "TextButton" -> base + listOf("Text", "TextColor3", "TextSize")
         "ImageLabel" -> base + listOf("Image")
         "MeshPart" -> listOf("MeshId", "TextureID")
+        "StringValue", "NumberValue", "BoolValue" -> listOf("Value")
         else -> emptyList()
     }
 
@@ -167,6 +168,9 @@ object Defaults {
                 i.props["Playing"] = "false"
             }
             "ScreenGui" -> i.props["Enabled"] = "true"
+            "StringValue" -> i.props["Value"] = ""
+            "NumberValue" -> i.props["Value"] = "0"
+            "BoolValue" -> i.props["Value"] = "false"
         }
         if (cls == "Frame" || cls == "TextLabel" || cls == "TextButton" || cls == "ImageLabel") {
             i.props["Position"] = "0,20,0,20"
@@ -207,7 +211,7 @@ object Scene {
     init {
         val names = listOf(
             "Workspace", "Players", "Lighting", "MaterialService", "ReplicatedFirst", "ReplicatedStorage",
-            "ServerScriptService", "ServerStorage", "StarterGui", "StarterPack", "StarterPlayer", "Teams", "SoundService"
+            "ServerScriptService", "ServerStorage", "StarterGui", "StarterPack", "StarterPlayer", "Teams", "SoundService", "Chat"
         )
         for (n in names) {
             val s = if (n == "Workspace") workspace else Inst(n, n)
@@ -225,6 +229,15 @@ object Scene {
         for (s in services.values) s.children.clear()
         selected = null
         selObj = null
+        ensureStarter()
+    }
+
+    // StarterPlayerScripts e StarterCharacterScripts ficam dentro do StarterPlayer
+    fun ensureStarter() {
+        val sp = services["StarterPlayer"] ?: return
+        for (n in listOf("StarterPlayerScripts", "StarterCharacterScripts")) {
+            if (sp.children.none { it.className == n }) sp.add(Inst(n, n))
+        }
     }
 
     // modelos da tela inicial (New): Baseplate, Classic Baseplate e Projeto Vazio
@@ -303,6 +316,7 @@ object Scene {
             s.children.clear()
             for (c in m[n] ?: emptyList()) s.add(c.cloneTree())
         }
+        ensureStarter()
     }
 }
 

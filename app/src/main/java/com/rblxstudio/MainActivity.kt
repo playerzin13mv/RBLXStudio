@@ -336,7 +336,7 @@ class MainActivity : Activity() {
         refreshAccount()
         if (RobloxAuth.loggedIn(this)) {
             RobloxAuth.loadAvatar(this) { refreshAccount() }
-            Avatar.load(this) { toast(it) }
+            Avatar.load(this) { toast(it.lines().first()) }
         }
         handleIntent(intent)
     }
@@ -362,7 +362,7 @@ class MainActivity : Activity() {
                 refreshAccount()
                 if (ok) {
                     RobloxAuth.loadAvatar(this) { refreshAccount() }
-                    Avatar.load(this) { toast(it) }
+                    Avatar.load(this) { avatarReport(it) }
                 }
             }
         }
@@ -724,7 +724,7 @@ class MainActivity : Activity() {
 
     private fun accountMenu() {
         if (RobloxAuth.loggedIn(this)) {
-            AlertDialog.Builder(this)
+            StyledDialog(this)
                 .setTitle(RobloxAuth.displayName(this))
                 .setMessage("@" + RobloxAuth.username(this) + "\nID: " + RobloxAuth.userId(this))
                 .setPositiveButton("Sair") { _, _ ->
@@ -732,6 +732,9 @@ class MainActivity : Activity() {
                     Avatar.clear()
                     refreshAccount()
                     toast("Você saiu da conta")
+                }
+                .setNeutralButton("Ver avatar") { _, _ ->
+                    avatarReport(Avatar.status.ifEmpty { "O avatar ainda está carregando..." })
                 }
                 .setNegativeButton("Fechar", null)
                 .show()
@@ -744,24 +747,43 @@ class MainActivity : Activity() {
         val et = EditText(this)
         et.hint = hint
         et.setText(init)
-        et.textSize = 12f
+        et.textSize = 14f
         et.setTextColor(C_TEXT)
         et.setHintTextColor(C_DIM)
         et.setSingleLine()
+        et.setPadding(dp(12), dp(10), dp(12), dp(10))
+        val g = android.graphics.drawable.GradientDrawable()
+        g.setColor(C_FIELD)
+        g.cornerRadius = dp(8).toFloat()
+        g.setStroke(dp(1), 0xFF4A4A4A.toInt())
+        et.background = g
         if (secret) et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         return et
+    }
+
+    // resultado do carregamento do avatar (o que veio e o que falhou)
+    internal fun avatarReport(text: String) {
+        StyledDialog(this).setTitle("Avatar carregado").setMessage(text)
+            .setPositiveButton("OK", null).show()
     }
 
     private fun loginDialog() {
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
-        box.setPadding(dp(20), dp(8), dp(20), 0)
-        box.addView(tv("Digite seu usuário do Roblox (ou o ID) para carregar seu avatar, roupas e acessórios. Não precisa de senha.", 12f, C_TEXT), lp(MATCH, WRAP))
-        val et = styledEdit("Usuário do Roblox", "", false)
-        et.textSize = 14f
-        et.setText(RobloxAuth.username(this))
+        box.gravity = Gravity.CENTER_HORIZONTAL
+        val logo = ImageView(this)
+        logo.setImageResource(R.drawable.logo)
+        box.addView(logo, lp(dp(56), dp(56)))
+        val head = tv("Entre com seu Roblox", 16f, C_TEXT, true)
+        head.setPadding(0, dp(8), 0, dp(4))
+        box.addView(head, lp(WRAP, WRAP))
+        val info = tv("Digite seu usuário (ou o ID). Seu avatar, roupas e acessórios são carregados na hora. Não precisa de senha.", 12f, C_DIM)
+        info.gravity = Gravity.CENTER
+        info.setPadding(0, 0, 0, dp(10))
+        box.addView(info, lp(MATCH, WRAP))
+        val et = styledEdit("Usuário do Roblox", RobloxAuth.username(this), false)
         box.addView(et, lp(MATCH, WRAP))
-        AlertDialog.Builder(this)
+        StyledDialog(this)
             .setTitle("Entrar")
             .setView(box)
             .setPositiveButton("Entrar") { _, _ ->
@@ -771,7 +793,7 @@ class MainActivity : Activity() {
                     refreshAccount()
                     if (ok) {
                         RobloxAuth.loadAvatar(this) { refreshAccount() }
-                        Avatar.load(this) { toast(it) }
+                        Avatar.load(this) { avatarReport(it) }
                     }
                 }
             }
@@ -804,7 +826,7 @@ class MainActivity : Activity() {
         box.addView(secEt, lp(MATCH, WRAP))
         val sv = ScrollView(this)
         sv.addView(box)
-        AlertDialog.Builder(this)
+        StyledDialog(this)
             .setTitle("Entrar com Roblox")
             .setView(sv)
             .setPositiveButton("Entrar") { _, _ ->
@@ -833,7 +855,7 @@ class MainActivity : Activity() {
 
     // ---------- menu File ----------
     private fun fileMenu() {
-        AlertDialog.Builder(this).setTitle("File")
+        StyledDialog(this).setTitle("File")
             .setItems(arrayOf("Novo lugar", "Abrir...", "Salvar", "Salvar como...", "Publicar no Roblox")) { _, i ->
                 when (i) {
                     0 -> newPlace()
@@ -957,7 +979,7 @@ class MainActivity : Activity() {
             toast("Nenhum lugar salvo ainda")
             return
         }
-        AlertDialog.Builder(this).setTitle("Abrir lugar")
+        StyledDialog(this).setTitle("Abrir lugar")
             .setItems(names.toTypedArray()) { _, i ->
                 try {
                     Storage.load(this, names[i])
@@ -992,7 +1014,7 @@ class MainActivity : Activity() {
         val box = LinearLayout(this)
         box.setPadding(dp(20), dp(8), dp(20), 0)
         box.addView(et, lp(MATCH, WRAP))
-        AlertDialog.Builder(this).setTitle("Salvar como")
+        StyledDialog(this).setTitle("Salvar como")
             .setView(box)
             .setPositiveButton("Salvar") { _, _ -> doSave(et.text.toString()) }
             .setNegativeButton("Cancelar", null)
@@ -1010,7 +1032,7 @@ class MainActivity : Activity() {
 
     // ---------- inserir objetos ----------
     private fun canHold(i: Inst) =
-        i is PartData || i.className == "Folder" || i.className == "Model" || i.parent === Scene.game
+        i is PartData || i.className == "Folder" || i.className == "Model" || i.className.startsWith("Starter") || i.parent === Scene.game
 
     internal fun insertObject(cls: String) {
         if (needStop()) return
@@ -1036,7 +1058,8 @@ class MainActivity : Activity() {
 
     internal fun insertMenu(list: List<String>) {
         if (needStop()) return
-        AlertDialog.Builder(this).setTitle("Inserir objeto")
+        StyledDialog(this).setTitle("Inserir objeto")
+            .setIcons(list.map { classIcon(it) })
             .setItems(list.toTypedArray()) { _, i -> insertObject(list[i]) }
             .show()
     }
@@ -1084,7 +1107,7 @@ class MainActivity : Activity() {
         box.addView(et, lp(MATCH, WRAP))
         val sv = ScrollView(this)
         sv.addView(box)
-        AlertDialog.Builder(this).setTitle(s.name)
+        StyledDialog(this).setTitle(s.name)
             .setView(sv)
             .setPositiveButton("Salvar") { _, _ ->
                 val src = et.text.toString()

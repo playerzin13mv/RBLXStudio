@@ -40,6 +40,7 @@ object Avatar {
     // resumo da última carga, para mostrar na tela
     @Volatile var status = ""
     private val errors = ArrayList<String>()
+    private val lines = ArrayList<String>()
     private val ui = Handler(Looper.getMainLooper())
 
     private val bricks = mapOf(
@@ -113,6 +114,7 @@ object Avatar {
         if (id.isEmpty()) return
         Thread {
             errors.clear()
+            lines.clear()
             var got = 0
             try {
                 val o = JSONObject(Assets.httpGet("https://avatar.roblox.com/v1/users/" + id + "/avatar"))
@@ -141,7 +143,9 @@ object Avatar {
                 (if (tshirt != null) "camiseta OK" else "sem camiseta") + ", " +
                 (if (face != null) "rosto OK, " else "") + accs.size + " acessório(s)"
             if (layered > 0) s += ", " + layered + " roupa(s) em camadas (ainda não suportada)"
-            if (errors.isNotEmpty()) s += "\nFalhou: " + errors.first().take(120) + " (" + errors.size + " erro(s))"
+            if (errors.isNotEmpty()) s += "\nFalhou: " + errors.first().take(160) + " (" + errors.size + " erro(s))"
+            if (lines.isNotEmpty()) s += "\n\nItens:\n" + lines.joinToString("\n")
+            if (errors.size > 1) s += "\n\nErros:\n" + errors.take(8).joinToString("\n") { "- " + it.take(140) }
             status = s
             Out.add(s, if (errors.isEmpty()) 0 else 1)
             if (onDone != null) ui.post { onDone(s) }
@@ -176,26 +180,35 @@ object Avatar {
         val accList = ArrayList<Acc>()
         layered = 0
         for (item in items) {
+            val tag = "- " + item.name + " [tipo " + item.type + "]: "
             try {
                 when (item.type) {
-                    T_SHIRT -> { val b = clothingTemplate(item.id); if (b != null) { shirt = b; version++ } }
-                    T_PANTS -> { val b = clothingTemplate(item.id); if (b != null) { pants = b; version++ } }
-                    T_TSHIRT -> { val b = clothingTemplate(item.id); if (b != null) { tshirt = b; version++ } }
-                    T_FACE -> { val b = clothingTemplate(item.id); if (b != null) { face = b; version++ } }
-                    in 64..72 -> layered++
+                    T_SHIRT -> { val b = clothingTemplate(item.id); if (b != null) { shirt = b; version++ }; lines.add(tag + (if (b != null) "camisa OK" else "falhou")) }
+                    T_PANTS -> { val b = clothingTemplate(item.id); if (b != null) { pants = b; version++ }; lines.add(tag + (if (b != null) "calça OK" else "falhou")) }
+                    T_TSHIRT -> { val b = clothingTemplate(item.id); if (b != null) { tshirt = b; version++ }; lines.add(tag + (if (b != null) "camiseta OK" else "falhou")) }
+                    T_FACE -> { val b = clothingTemplate(item.id); if (b != null) { face = b; version++ }; lines.add(tag + (if (b != null) "rosto OK" else "falhou")) }
+                    in 64..72 -> { layered++; lines.add(tag + "roupa em camadas (não suportada)") }
                     else -> {
                         val kind = ACC_TYPES[item.type]
-                        if (kind != null && accList.size < MAX_ACCS) {
+                        if (kind == null) {
+                            lines.add(tag + "tipo ignorado")
+                        } else if (accList.size >= MAX_ACCS) {
+                            lines.add(tag + "limite de acessórios")
+                        } else {
                             val acc = loadAccessory(item.id, item.name, kind)
                             if (acc != null) {
                                 accList.add(acc)
                                 accs = ArrayList(accList)
                                 version++
+                                lines.add(tag + kind + " OK" + (if (acc.tex == null) " (sem textura)" else ""))
+                            } else {
+                                lines.add(tag + "falhou")
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
+                lines.add(tag + "erro")
                 errors.add(item.name + " (" + item.id + "): " + (e.message ?: e.javaClass.simpleName))
             }
         }

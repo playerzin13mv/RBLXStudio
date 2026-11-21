@@ -77,7 +77,7 @@ internal fun MainActivity.pickColor() {
         toast("Selecione uma peça")
         return
     }
-    AlertDialog.Builder(this).setTitle("Color")
+    StyledDialog(this).setTitle("Color")
         .setItems(palette.map { it.first }.toTypedArray()) { _, i ->
             val c = palette[i].second
             Editor.setColor(((c shr 16) and 255) / 255f, ((c shr 8) and 255) / 255f, (c and 255) / 255f)

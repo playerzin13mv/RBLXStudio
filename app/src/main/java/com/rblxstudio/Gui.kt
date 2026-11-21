@@ -89,29 +89,54 @@ object Audio {
     private val players = HashMap<Inst, MediaPlayer>()
     private val main = Handler(Looper.getMainLooper())
 
+    // converte o ID em link direto do áudio (a API nova devolve o link do CDN)
+    private fun resolve(raw: String): String {
+        if (raw.startsWith("http")) return raw
+        val id = Assets.idOf(raw)
+        try {
+            val j = org.json.JSONObject(Assets.httpGet("https://assetdelivery.roblox.com/v2/assetId/" + id))
+            val locs = j.optJSONArray("locations")
+            if (locs != null && locs.length() > 0) {
+                val loc = locs.getJSONObject(0).optString("location", "")
+                if (loc.isNotEmpty()) return loc
+            }
+            val errs = j.optJSONArray("errors")
+            if (errs != null && errs.length() > 0) {
+                throw Exception(errs.getJSONObject(0).optString("message", "sem permissão"))
+            }
+        } catch (e: Exception) {
+            if (e.message?.contains("HTTP") == false && e.message?.contains("Unable") == false) {
+                Out.add("Sound " + id + ": " + (e.message ?: "erro") + " (o Roblox só libera áudios públicos)", 1)
+            }
+        }
+        return "https://assetdelivery.roblox.com/v1/asset/?id=" + id
+    }
+
     fun play(i: Inst) {
         val raw = i.prop("SoundId").trim()
         if (raw.isEmpty()) return
-        val src = if (raw.startsWith("http")) raw else "https://assetdelivery.roblox.com/v1/asset/?id=" + Assets.idOf(raw)
-        main.post {
-            try {
-                stopNow(i)
-                val mp = MediaPlayer()
-                mp.setDataSource(src)
-                mp.isLooping = i.prop("Looped") == "true"
-                val v = (i.prop("Volume", "1").toFloatOrNull() ?: 1f).coerceIn(0f, 1f)
-                mp.setVolume(v, v)
-                mp.setOnPreparedListener { it.start() }
-                mp.setOnErrorListener { _, _, _ ->
-                    Out.add("Sound: não consegui tocar o áudio " + raw, 1)
-                    true
+        Thread {
+            val src = resolve(raw)
+            main.post {
+                try {
+                    stopNow(i)
+                    val mp = MediaPlayer()
+                    mp.setDataSource(src)
+                    mp.isLooping = i.prop("Looped") == "true"
+                    val v = (i.prop("Volume", "1").toFloatOrNull() ?: 1f).coerceIn(0f, 1f)
+                    mp.setVolume(v, v)
+                    mp.setOnPreparedListener { it.start() }
+                    mp.setOnErrorListener { _, _, _ ->
+                        Out.add("Sound: não consegui tocar o áudio " + raw + " (ID inválido ou áudio privado)", 1)
+                        true
+                    }
+                    mp.prepareAsync()
+                    players[i] = mp
+                } catch (e: Exception) {
+                    Out.add("Sound: " + (e.message ?: "erro"), 1)
                 }
-                mp.prepareAsync()
-                players[i] = mp
-            } catch (e: Exception) {
-                Out.add("Sound: " + (e.message ?: "erro"), 1)
             }
-        }
+        }.start()
     }
 
     private fun stopNow(i: Inst) {
