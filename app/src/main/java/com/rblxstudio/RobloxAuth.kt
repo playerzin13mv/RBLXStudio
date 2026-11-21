@@ -32,6 +32,52 @@ object RobloxAuth {
 
     private val main = Handler(Looper.getMainLooper())
     @Volatile var avatar: Bitmap? = null
+    // sessão (.ROBLOSECURITY) do login pelo site do Roblox; só vai para hosts *.roblox.com
+    @Volatile var cookie: String = ""
+
+    fun restoreSession(c: Context) {
+        if (cookie.isEmpty()) cookie = prefs(c).getString("cookie", "") ?: ""
+    }
+
+    // confirma a sessão com o Roblox e guarda quem é o usuário
+    fun sessionLogin(ctx: Context, value: String, done: (Boolean, String) -> Unit) {
+        val app = ctx.applicationContext
+        Thread {
+            var ok = false
+            var msg = ""
+            try {
+                val conn = URL("https://users.roblox.com/v1/users/authenticated").openConnection() as HttpURLConnection
+                try {
+                    conn.connectTimeout = 15000
+                    conn.readTimeout = 15000
+                    conn.setRequestProperty("Cookie", ".ROBLOSECURITY=" + value)
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        val u = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                        val name = u.optString("name", "")
+                        val display = u.optString("displayName", name)
+                        prefs(app).edit()
+                            .putString("cookie", value)
+                            .putString("sub", u.optLong("id", 0L).toString())
+                            .putString("nickname", display.ifEmpty { name })
+                            .putString("username", name)
+                            .putString("picture", "")
+                            .apply()
+                        cookie = value
+                        ok = true
+                        msg = "Logado como " + display.ifEmpty { name }
+                    } else {
+                        msg = "O Roblox não confirmou o login (" + code + ")"
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                msg = "Erro de rede: " + (e.message ?: e.javaClass.simpleName)
+            }
+            main.post { done(ok, msg) }
+        }.start()
+    }
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -327,7 +373,12 @@ object RobloxAuth {
             }.start()
         }
         p.edit().remove("access_token").remove("refresh_token").remove("sub").remove("nickname")
-            .remove("username").remove("picture").apply()
+            .remove("username").remove("picture").remove("cookie").apply()
+        cookie = ""
+        try {
+            android.webkit.CookieManager.getInstance().removeAllCookies(null)
+        } catch (e: Exception) {
+        }
         avatar = null
     }
 }

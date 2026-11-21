@@ -110,6 +110,7 @@ object Avatar {
     }
 
     fun load(ctx: Context, onDone: ((String) -> Unit)? = null) {
+        RobloxAuth.restoreSession(ctx)
         val id = RobloxAuth.userId(ctx)
         if (id.isEmpty()) return
         Thread {
@@ -146,6 +147,9 @@ object Avatar {
             if (errors.isNotEmpty()) s += "\nFalhou: " + errors.first().take(160) + " (" + errors.size + " erro(s))"
             if (lines.isNotEmpty()) s += "\n\nItens:\n" + lines.joinToString("\n")
             if (errors.size > 1) s += "\n\nErros:\n" + errors.take(8).joinToString("\n") { "- " + it.take(140) }
+            if (RobloxAuth.cookie.isEmpty() && errors.any { it.contains("401") }) {
+                s += "\n\nDica: o Roblox só entrega roupas com login. Toque em Entrar > Login pelo site."
+            }
             status = s
             Out.add(s, if (errors.isEmpty()) 0 else 1)
             if (onDone != null) ui.post { onDone(s) }
@@ -225,6 +229,9 @@ object Avatar {
             c.readTimeout = 20000
             c.instanceFollowRedirects = false
             c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) RBLXStudio/0.8")
+            val ck = RobloxAuth.cookie
+            val host = URL(url).host ?: ""
+            if (ck.isNotEmpty() && host.endsWith(".roblox.com")) c.setRequestProperty("Cookie", ".ROBLOSECURITY=" + ck)
             try {
                 val code = c.responseCode
                 if (code in 300..399) {
@@ -250,6 +257,7 @@ object Avatar {
             c.readTimeout = 20000
             c.setRequestProperty("Accept", "application/json")
             c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) RBLXStudio/0.8")
+            if (RobloxAuth.cookie.isNotEmpty()) c.setRequestProperty("Cookie", ".ROBLOSECURITY=" + RobloxAuth.cookie)
             try {
                 if (c.responseCode in 200..299) {
                     val j = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
@@ -311,7 +319,28 @@ object Avatar {
     }
 
     // item de acessório -> malha + textura
+    private var lastErr = ""
+
+    // malha do próprio item; se der erro (login, formato novo), tenta a miniatura 3D do Roblox
     private fun loadAccessory(itemId: Long, name: String, kind: String): Acc? {
+        lastErr = ""
+        try {
+            val a = loadAccessoryMesh(itemId, name, kind)
+            if (a != null) return a
+        } catch (e: Exception) {
+            lastErr = name + ": " + (e.message ?: e.javaClass.simpleName)
+        }
+        try {
+            val b = loadAccessory3d(itemId, name, kind)
+            if (b != null) return b
+        } catch (e: Exception) {
+            lastErr += " / 3D: " + (e.message ?: e.javaClass.simpleName)
+        }
+        if (lastErr.isNotEmpty()) errors.add(lastErr)
+        return null
+    }
+
+    private fun loadAccessoryMesh(itemId: Long, name: String, kind: String): Acc? {
         val raw = asset(itemId)
         val ids = refs(raw)
         var mesh: Mesh? = null
@@ -330,10 +359,116 @@ object Avatar {
             }
         }
         val m = mesh ?: run {
-            errors.add(name + ": malha " + (if (meshVer.isEmpty()) "não encontrada" else meshVer + " não suportada"))
+            lastErr = name + ": malha " + (if (meshVer.isEmpty()) "não encontrada" else meshVer + " não suportada")
             return null
         }
         return Acc(name, kind, m.data, m.min, m.max, tex)
+    }
+
+    // ---------- plano B: miniatura 3D do Roblox (OBJ + textura), sem login e sem formato de malha ----------
+    private fun cdn(hash: String): String {
+        var i = 31
+        for (ch in hash.take(32)) i = i xor ch.code
+        return "https://t" + (i % 8) + ".rbxcdn.com/" + hash
+    }
+
+    private fun loadAccessory3d(itemId: Long, name: String, kind: String): Acc? {
+        var imageUrl = ""
+        for (k in 0 until 8) {
+            val j = JSONObject(String(bytes("https://thumbnails.roblox.com/v1/assets-thumbnail-3d?assetId=" + itemId), Charsets.UTF_8))
+            val st = j.optString("state")
+            if (st == "Completed") {
+                imageUrl = j.optString("imageUrl")
+                break
+            }
+            if (st == "Error" || st == "Blocked") break
+            Thread.sleep(1500)
+        }
+        if (imageUrl.isEmpty()) return null
+        val info = JSONObject(String(bytes(imageUrl), Charsets.UTF_8))
+        val obj = String(bytes(cdn(info.getString("obj"))), Charsets.UTF_8)
+        var tex: Bitmap? = null
+        val texs = info.optJSONArray("textures")
+        if (texs != null && texs.length() > 0) {
+            try {
+                tex = decodeBmp(bytes(cdn(texs.getString(0))))
+            } catch (e: Exception) {
+                tex = null
+            }
+        }
+        val mesh = parseObj(obj) ?: return null
+        return Acc(name, kind, mesh.data, mesh.min, mesh.max, tex)
+    }
+
+    private fun parseObj(text: String): Mesh? {
+        val vs = ArrayList<Float>()
+        val vts = ArrayList<Float>()
+        val vns = ArrayList<Float>()
+        val out = ArrayList<Float>()
+        val ws = Regex("\\s+")
+        fun ix(s: String, n: Int): Int {
+            val v = s.toInt()
+            return if (v > 0) v - 1 else n + v
+        }
+        for (raw in text.lineSequence()) {
+            val line = raw.trim()
+            if (line.length < 2) continue
+            if (line.startsWith("v ")) {
+                val p = line.split(ws)
+                vs.add(p[1].toFloat()); vs.add(p[2].toFloat()); vs.add(p[3].toFloat())
+            } else if (line.startsWith("vt ")) {
+                val p = line.split(ws)
+                vts.add(p[1].toFloat()); vts.add(p[2].toFloat())
+            } else if (line.startsWith("vn ")) {
+                val p = line.split(ws)
+                vns.add(p[1].toFloat()); vns.add(p[2].toFloat()); vns.add(p[3].toFloat())
+            } else if (line.startsWith("f ")) {
+                val p = line.split(ws).drop(1)
+                if (p.size < 3) continue
+                for (k in 1 until p.size - 1) {
+                    for (tok in arrayOf(p[0], p[k], p[k + 1])) {
+                        val t = tok.split("/")
+                        val vi = ix(t[0], vs.size / 3)
+                        out.add(vs[vi * 3]); out.add(vs[vi * 3 + 1]); out.add(vs[vi * 3 + 2])
+                        if (t.size > 2 && t[2].isNotEmpty() && vns.isNotEmpty()) {
+                            val ni = ix(t[2], vns.size / 3)
+                            out.add(vns[ni * 3]); out.add(vns[ni * 3 + 1]); out.add(vns[ni * 3 + 2])
+                        } else {
+                            out.add(0f); out.add(0f); out.add(0f)
+                        }
+                        if (t.size > 1 && t[1].isNotEmpty() && vts.isNotEmpty()) {
+                            val ti = ix(t[1], vts.size / 2)
+                            out.add(vts[ti * 2]); out.add(1f - vts[ti * 2 + 1])
+                        } else {
+                            out.add(0f); out.add(0f)
+                        }
+                    }
+                }
+            }
+        }
+        val tris = out.size / 24
+        if (tris <= 0 || tris > MAX_TRIS) return null
+        val d = out.toFloatArray()
+        // sem normais no OBJ: usa a normal plana de cada triângulo
+        if (vns.isEmpty()) {
+            var i = 0
+            while (i + 24 <= d.size) {
+                val ux = d[i + 8] - d[i]; val uy = d[i + 9] - d[i + 1]; val uz = d[i + 10] - d[i + 2]
+                val wx = d[i + 16] - d[i]; val wy = d[i + 17] - d[i + 1]; val wz = d[i + 18] - d[i + 2]
+                var nx = uy * wz - uz * wy
+                var ny = uz * wx - ux * wz
+                var nz = ux * wy - uy * wx
+                val l = Math.sqrt((nx * nx + ny * ny + nz * nz).toDouble()).toFloat()
+                if (l > 1e-8f) { nx /= l; ny /= l; nz /= l }
+                for (k in 0..2) {
+                    d[i + k * 8 + 3] = nx
+                    d[i + k * 8 + 4] = ny
+                    d[i + k * 8 + 5] = nz
+                }
+                i += 24
+            }
+        }
+        return finish(d)
     }
 
     // ---------- rbxm: descompacta os blocos (LZ4) para achar os textos ----------

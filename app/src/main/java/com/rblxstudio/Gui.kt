@@ -210,7 +210,7 @@ class GameGui(private val act: Activity) : FrameLayout(act) {
 
         val btns = LinearLayout(act)
         btns.orientation = LinearLayout.HORIZONTAL
-        val menu = roundBtn(R.drawable.logo, null)
+        val menu = roundBtn(R.drawable.ic_roblox, Color.WHITE)
         menu.setOnClickListener { onMenu?.invoke() }
         btns.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
         val chatBtn = roundBtn(R.drawable.ic_chat, Color.WHITE)

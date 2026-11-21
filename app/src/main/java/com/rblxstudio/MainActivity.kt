@@ -777,7 +777,7 @@ class MainActivity : Activity() {
         val head = tv("Entre com seu Roblox", 16f, C_TEXT, true)
         head.setPadding(0, dp(8), 0, dp(4))
         box.addView(head, lp(WRAP, WRAP))
-        val info = tv("Digite seu usuário (ou o ID). Seu avatar, roupas e acessórios são carregados na hora. Não precisa de senha.", 12f, C_DIM)
+        val info = tv("Digite seu usuário (ou o ID) para entrar rápido, sem senha. Para baixar roupas e acessórios com tudo, use Login pelo site: você entra na página oficial do Roblox.", 12f, C_DIM)
         info.gravity = Gravity.CENTER
         info.setPadding(0, 0, 0, dp(10))
         box.addView(info, lp(MATCH, WRAP))
@@ -797,12 +797,15 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            .setNeutralButton("Pelo site do Roblox") { _, _ ->
-                if (RobloxAuth.clientId(this).isEmpty()) {
-                    oauthDialog()
-                } else {
-                    try { RobloxAuth.begin(this) } catch (e: Exception) { toast("Não consegui abrir o navegador") }
-                }
+            .setNeutralButton("Login pelo site") { _, _ ->
+                WebLogin(this) { ok, msg ->
+                    toast(msg)
+                    refreshAccount()
+                    if (ok) {
+                        RobloxAuth.loadAvatar(this) { refreshAccount() }
+                        Avatar.load(this) { avatarReport(it) }
+                    }
+                }.show()
             }
             .setNegativeButton("Cancelar", null)
             .show()
