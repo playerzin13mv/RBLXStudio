@@ -1,11 +1,14 @@
 package com.rblxstudio
 
+import android.graphics.Bitmap
 import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.concurrent.ConcurrentHashMap
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.PI
@@ -27,11 +30,36 @@ class Renderer : GLSurfaceView.Renderer {
     private var uColor = 0
     private var uLight = 0
     private var uGrid = 0
+    private var uTex = 0
+    private var uUseTex = 0
+    private var uHalf = 0
+    private var uTile = 0
+    private var uFace = 0
+    private var aT = 0
+    private var curTex = 0
+    private val texIds = HashMap<String, Int>()
+    private val texAsked = HashSet<String>()
+    private val texPending = ConcurrentHashMap<String, Bitmap>()
     private lateinit var cube: FloatBuffer
     private lateinit var lines: FloatBuffer
     private lateinit var ring: FloatBuffer
     private var ringCount = 0
     private val yellow = floatArrayOf(1f, 0.9f, 0.2f)
+
+    companion object {
+        private val snap = FloatArray(16)
+
+        // posição na tela (px do viewport) de um ponto do mundo; null se estiver atrás da câmera
+        fun project(x: Float, y: Float, z: Float, w: Int, h: Int): FloatArray? {
+            val m = FloatArray(16)
+            synchronized(snap) { System.arraycopy(snap, 0, m, 0, 16) }
+            val cx = m[0] * x + m[4] * y + m[8] * z + m[12]
+            val cy = m[1] * x + m[5] * y + m[9] * z + m[13]
+            val cw = m[3] * x + m[7] * y + m[11] * z + m[15]
+            if (cw <= 0.01f) return null
+            return floatArrayOf((cx / cw * 0.5f + 0.5f) * w, (1f - (cy / cw * 0.5f + 0.5f)) * h)
+        }
+    }
     private var lastNs = 0L
 
     private fun cross(a: FloatArray, b: FloatArray) = floatArrayOf(
@@ -109,16 +137,41 @@ class Renderer : GLSurfaceView.Renderer {
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0.62f, 0.69f, 0.80f, 1f)
         buildMeshes()
-        val vs = "uniform mat4 uVP; uniform mat4 uModel; attribute vec3 aP; attribute vec3 aN;\n" +
-            "varying float vL; varying vec3 vW;\n" +
-            "void main(){ vec4 w = uModel * vec4(aP, 1.0); vW = w.xyz;\n" +
+        val vs = "uniform mat4 uVP; uniform mat4 uModel; attribute vec3 aP; attribute vec3 aN; attribute vec2 aT;\n" +
+            "varying float vL; varying vec3 vW; varying vec3 vO; varying vec3 vN; varying vec2 vT;\n" +
+            "void main(){ vec4 w = uModel * vec4(aP, 1.0); vW = w.xyz; vO = aP; vN = aN; vT = aT;\n" +
             "vec3 n = normalize((uModel * vec4(aN, 0.0)).xyz);\n" +
             "vL = 0.45 + 0.55 * max(dot(n, normalize(vec3(0.4, 1.0, 0.6))), 0.0);\n" +
             "gl_Position = uVP * w; }"
-        val fs = "precision mediump float; uniform vec3 uColor; uniform float uLight; uniform float uGrid;\n" +
-            "varying float vL; varying vec3 vW;\n" +
+        val fs = "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
+            "uniform vec3 uColor; uniform float uLight; uniform float uGrid;\n" +
+            "uniform sampler2D uTex; uniform float uUseTex; uniform vec3 uHalf; uniform float uTile; uniform vec4 uFace[6];\n" +
+            "varying float vL; varying vec3 vW; varying vec3 vO; varying vec3 vN; varying vec2 vT;\n" +
             "void main(){ vec3 c = uColor;\n" +
+            "if (uUseTex > 2.5) { vec4 mt = texture2D(uTex, vT); gl_FragColor = vec4(mt.rgb * mix(1.0, vL, uLight), 1.0); return; }\n" +
+            "if (uUseTex > 1.5) {\n" +
+            "  vec3 an2 = abs(vN); vec2 uv2; vec4 r;\n" +
+            "  if (an2.x > 0.5) { uv2 = vec2(-vO.z * sign(vN.x), vO.y); if (vN.x > 0.0) r = uFace[0]; else r = uFace[1]; }\n" +
+            "  else if (an2.y > 0.5) { uv2 = vec2(vO.x, -vO.z * sign(vN.y)); if (vN.y > 0.0) r = uFace[2]; else r = uFace[3]; }\n" +
+            "  else { uv2 = vec2(vO.x * sign(vN.z), vO.y); if (vN.z > 0.0) r = uFace[4]; else r = uFace[5]; }\n" +
+            "  if (r.z <= 0.0) discard;\n" +
+            "  vec2 t2 = uv2 * 0.5 + 0.5; t2.y = 1.0 - t2.y;\n" +
+            "  vec4 tc2 = texture2D(uTex, r.xy + t2 * r.zw);\n" +
+            "  if (tc2.a < 0.05) discard;\n" +
+            "  gl_FragColor = vec4(tc2.rgb * mix(1.0, vL, uLight), tc2.a); return;\n" +
+            "}\n" +
             "if (uGrid > 0.5) { float k = mod(floor(vW.x / 16.0) + floor(vW.z / 16.0), 2.0); c = c * (0.85 + 0.15 * k); }\n" +
+            "if (uUseTex > 0.5) {\n" +
+            "  vec3 an = abs(vN); vec2 uv; vec2 ext;\n" +
+            "  if (an.x > 0.5) { uv = vec2(-vO.z * sign(vN.x), vO.y); ext = vec2(uHalf.z, uHalf.y); }\n" +
+            "  else if (an.y > 0.5) { uv = vec2(vO.x, -vO.z * sign(vN.y)); ext = vec2(uHalf.x, uHalf.z); }\n" +
+            "  else { uv = vec2(vO.x * sign(vN.z), vO.y); ext = vec2(uHalf.x, uHalf.y); }\n" +
+            "  vec2 t = uv * 0.5 + 0.5;\n" +
+            "  if (uTile > 0.01) { t = uv * ext / uTile + 0.5; }\n" +
+            "  t.y = 1.0 - t.y;\n" +
+            "  vec4 tc = texture2D(uTex, t);\n" +
+            "  c = mix(c, tc.rgb, tc.a);\n" +
+            "}\n" +
             "gl_FragColor = vec4(c * mix(1.0, vL, uLight), 1.0); }"
         prog = GLES20.glCreateProgram()
         GLES20.glAttachShader(prog, shader(GLES20.GL_VERTEX_SHADER, vs))
@@ -126,11 +179,24 @@ class Renderer : GLSurfaceView.Renderer {
         GLES20.glLinkProgram(prog)
         aP = GLES20.glGetAttribLocation(prog, "aP")
         aN = GLES20.glGetAttribLocation(prog, "aN")
+        aT = GLES20.glGetAttribLocation(prog, "aT")
+        uFace = GLES20.glGetUniformLocation(prog, "uFace[0]")
         uVP = GLES20.glGetUniformLocation(prog, "uVP")
         uModel = GLES20.glGetUniformLocation(prog, "uModel")
         uColor = GLES20.glGetUniformLocation(prog, "uColor")
         uLight = GLES20.glGetUniformLocation(prog, "uLight")
         uGrid = GLES20.glGetUniformLocation(prog, "uGrid")
+        uTex = GLES20.glGetUniformLocation(prog, "uTex")
+        uUseTex = GLES20.glGetUniformLocation(prog, "uUseTex")
+        uHalf = GLES20.glGetUniformLocation(prog, "uHalf")
+        uTile = GLES20.glGetUniformLocation(prog, "uTile")
+        GLES20.glUseProgram(prog)
+        GLES20.glUniform1i(uTex, 0)
+        texIds.clear()
+        texAsked.clear()
+        avVer = -1
+        shirtTex = 0; pantsTex = 0; tshirtTex = 0
+        accGl.clear()
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
@@ -154,7 +220,40 @@ class Renderer : GLSurfaceView.Renderer {
         GLES20.glUniform3f(uColor, r, g, b)
         GLES20.glUniform1f(uLight, light)
         GLES20.glUniform1f(uGrid, grid)
+        GLES20.glUniform1f(uUseTex, if (curTex != 0) 1f else 0f)
         GLES20.glDrawArrays(mode, 0, count)
+    }
+
+    private fun pot(v: Int): Int {
+        var n = 1
+        while (n < v && n < 1024) n *= 2
+        return n
+    }
+
+    private fun upload(src: Bitmap): Int {
+        val w = pot(src.width)
+        val h = pot(src.height)
+        val bmp = if (w == src.width && h == src.height) src else Bitmap.createScaledBitmap(src, w, h, true)
+        val ids = IntArray(1)
+        GLES20.glGenTextures(1, ids, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0])
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR_MIPMAP_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_REPEAT)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_REPEAT)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+        GLES20.glGenerateMipmap(GLES20.GL_TEXTURE_2D)
+        return ids[0]
+    }
+
+    // textura de uma Part: 0 enquanto ainda está baixando
+    private fun texFor(src: String): Int {
+        val id = texIds[src]
+        if (id != null) return id
+        if (texAsked.add(src)) {
+            Assets.image(src) { bmp -> if (bmp != null) texPending[src] = bmp }
+        }
+        return 0
     }
 
     private fun handleModel(h: Editor.Handle) {
@@ -176,32 +275,248 @@ class Renderer : GLSurfaceView.Renderer {
         Matrix.scaleM(model, 0, rad, rad, rad)
     }
 
-    // desenha uma caixa do personagem, relativa ao centro dele e girada para onde ele olha
-    private fun body(ox: Float, oy: Float, oz: Float, hx: Float, hy: Float, hz: Float, col: Int,
-                     ang: Float = 0f, pivotY: Float = oy) {
-        Matrix.setIdentityM(model, 0)
-        Matrix.translateM(model, 0, Play.x, Play.y, Play.z)
-        Matrix.rotateM(model, 0, Play.facing, 0f, 1f, 0f)
-        Matrix.translateM(model, 0, ox, pivotY, oz)
-        if (ang != 0f) Matrix.rotateM(model, 0, ang, 1f, 0f, 0f)
-        Matrix.translateM(model, 0, 0f, oy - pivotY, 0f)
-        Matrix.scaleM(model, 0, hx, hy, hz)
-        draw(model, ((col shr 16) and 255) / 255f, ((col shr 8) and 255) / 255f, (col and 255) / 255f,
+    // ---------- avatar: roupas 2D e acessórios 3D ----------
+    private class AccGl(val acc: Acc, val buf: FloatBuffer, val count: Int, val tex: Int)
+
+    private var avVer = -1
+    private var shirtTex = 0
+    private var pantsTex = 0
+    private var tshirtTex = 0
+    private val accGl = ArrayList<AccGl>()
+    private val faceArr = FloatArray(24)
+    private val pm = FloatArray(16)
+    private val pm2 = FloatArray(16)
+
+    private fun delTex(id: Int) {
+        if (id != 0) GLES20.glDeleteTextures(1, intArrayOf(id), 0)
+    }
+
+    // reenvia as texturas do avatar para a GPU quando o Avatar mudou
+    private fun syncAvatar() {
+        val v = Avatar.version
+        if (v == avVer) return
+        avVer = v
+        delTex(shirtTex); delTex(pantsTex); delTex(tshirtTex)
+        for (g in accGl) delTex(g.tex)
+        accGl.clear()
+        val sh = Avatar.shirt
+        val pa = Avatar.pants
+        val ts = Avatar.tshirt
+        shirtTex = if (sh != null) upload(sh) else 0
+        pantsTex = if (pa != null) upload(pa) else 0
+        tshirtTex = if (ts != null) upload(ts) else 0
+        for (a in Avatar.accs) {
+            val fb = ByteBuffer.allocateDirect(a.data.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            fb.put(a.data)
+            fb.position(0)
+            val t = a.tex
+            accGl.add(AccGl(a, fb, a.data.size / 8, if (t != null) upload(t) else 0))
+        }
+    }
+
+    // transformação (sem escala) do centro de uma parte do corpo: 0 torso, 1 cabeça, 2 braço dir, 3 braço esq, 4 perna dir, 5 perna esq
+    private val offs = arrayOf(
+        floatArrayOf(0f, 0.5f, 0f), floatArrayOf(0f, 1.9f, 0f),
+        floatArrayOf(-1.5f, 0.5f, 0f), floatArrayOf(1.5f, 0.5f, 0f),
+        floatArrayOf(-0.5f, -1.5f, 0f), floatArrayOf(0.5f, -1.5f, 0f)
+    )
+    private val halfs = arrayOf(
+        floatArrayOf(1f, 1f, 0.5f), floatArrayOf(0.6f, 0.6f, 0.6f),
+        floatArrayOf(0.5f, 1f, 0.5f), floatArrayOf(0.5f, 1f, 0.5f),
+        floatArrayOf(0.5f, 1f, 0.5f), floatArrayOf(0.5f, 1f, 0.5f)
+    )
+
+    private fun partMatrix(i: Int, out: FloatArray): Boolean {
+        Matrix.setIdentityM(out, 0)
+        if (Play.dead) {
+            val fr = Play.frags.firstOrNull { it.part == i } ?: return false
+            Matrix.translateM(out, 0, fr.px, fr.py, fr.pz)
+            Matrix.rotateM(out, 0, fr.ry, 0f, 1f, 0f)
+            Matrix.rotateM(out, 0, fr.rx, 1f, 0f, 0f)
+            Matrix.rotateM(out, 0, fr.rz, 0f, 0f, 1f)
+            return true
+        }
+        val swing = if (Play.moving) sin(Play.walkT * 11f) * 45f else 0f
+        val o = offs[i]
+        var ang = 0f
+        var pivot = o[1]
+        when (i) {
+            2 -> { ang = swing; pivot = 1.5f }
+            3 -> { ang = -swing; pivot = 1.5f }
+            4 -> { ang = -swing; pivot = -0.5f }
+            5 -> { ang = swing; pivot = -0.5f }
+        }
+        Matrix.translateM(out, 0, Play.x, Play.y, Play.z)
+        Matrix.rotateM(out, 0, Play.facing, 0f, 1f, 0f)
+        Matrix.translateM(out, 0, o[0], pivot, o[2])
+        if (ang != 0f) Matrix.rotateM(out, 0, ang, 1f, 0f, 0f)
+        Matrix.translateM(out, 0, 0f, o[1] - pivot, 0f)
+        return true
+    }
+
+    private fun colOf(i: Int): Int {
+        val c = Avatar.cols
+        return when (i) {
+            0 -> c[1]
+            1 -> c[0]
+            2 -> c[3]
+            3 -> c[2]
+            4 -> c[5]
+            else -> c[4]
+        }
+    }
+
+    private fun drawBox(base: FloatArray, ox: Float, oy: Float, oz: Float, hx: Float, hy: Float, hz: Float, col: Int) {
+        System.arraycopy(base, 0, pm2, 0, 16)
+        Matrix.translateM(pm2, 0, ox, oy, oz)
+        Matrix.scaleM(pm2, 0, hx, hy, hz)
+        draw(pm2, ((col shr 16) and 255) / 255f, ((col shr 8) and 255) / 255f, (col and 255) / 255f,
             1f, 0f, GLES20.GL_TRIANGLES, 36)
     }
 
+    // rect do template (585x559) -> índice de face
+    private fun face(i: Int, x: Int, y: Int, w: Int, h: Int) {
+        val inset = 0.6f
+        faceArr[i * 4] = (x + inset) / 585f
+        faceArr[i * 4 + 1] = (y + inset) / 559f
+        faceArr[i * 4 + 2] = (w - 2 * inset) / 585f
+        faceArr[i * 4 + 3] = (h - 2 * inset) / 559f
+    }
+
+    // faces: 0 +x (esquerda do avatar), 1 -x (direita), 2 +y, 3 -y, 4 +z (frente), 5 -z (costas)
+    private fun layout(part: Int): Boolean {
+        java.util.Arrays.fill(faceArr, 0f)
+        when (part) {
+            0 -> {
+                face(0, 361, 74, 64, 128); face(1, 165, 74, 64, 128)
+                face(2, 231, 8, 128, 64); face(3, 231, 204, 128, 64)
+                face(4, 231, 74, 128, 128); face(5, 427, 74, 128, 128)
+            }
+            2, 4 -> {   // lado direito do avatar (-x)
+                face(1, 19, 355, 64, 128); face(0, 154, 355, 64, 128)
+                face(4, 86, 355, 64, 128); face(5, 221, 355, 64, 128)
+                face(2, 217, 289, 64, 64); face(3, 217, 483, 64, 64)
+            }
+            3, 5 -> {   // lado esquerdo do avatar (+x)
+                face(1, 308, 355, 64, 128); face(0, 442, 355, 64, 128)
+                face(4, 375, 355, 64, 128); face(5, 509, 355, 64, 128)
+                face(2, 308, 289, 64, 64); face(3, 308, 483, 64, 64)
+            }
+            else -> return false
+        }
+        return true
+    }
+
+    private fun overlay(base: FloatArray, part: Int, tex: Int, grow: Float, whole: Boolean) {
+        if (tex == 0) return
+        if (whole) {
+            java.util.Arrays.fill(faceArr, 0f)
+            faceArr[16] = 0f; faceArr[17] = 0f; faceArr[18] = 1f; faceArr[19] = 1f   // só a frente
+        } else if (!layout(part)) return
+        val h = halfs[part]
+        System.arraycopy(base, 0, pm2, 0, 16)
+        Matrix.translateM(pm2, 0, 0f, 0f, 0f)
+        Matrix.scaleM(pm2, 0, h[0] * grow, h[1] * grow, h[2] * grow)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
+        GLES20.glUniform4fv(uFace, 6, faceArr, 0)
+        GLES20.glUniformMatrix4fv(uModel, 1, false, pm2, 0)
+        GLES20.glUniform3f(uColor, 1f, 1f, 1f)
+        GLES20.glUniform1f(uLight, 1f)
+        GLES20.glUniform1f(uGrid, 0f)
+        GLES20.glUniform1f(uUseTex, 2f)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 36)
+    }
+
+    private fun useMesh(buf: FloatBuffer) {
+        buf.position(0)
+        GLES20.glVertexAttribPointer(aP, 3, GLES20.GL_FLOAT, false, 32, buf)
+        GLES20.glEnableVertexAttribArray(aP)
+        buf.position(3)
+        GLES20.glVertexAttribPointer(aN, 3, GLES20.GL_FLOAT, false, 32, buf)
+        GLES20.glEnableVertexAttribArray(aN)
+        buf.position(6)
+        GLES20.glVertexAttribPointer(aT, 2, GLES20.GL_FLOAT, false, 32, buf)
+        GLES20.glEnableVertexAttribArray(aT)
+    }
+
+    private fun drawAccessory(g: AccGl) {
+        val a = g.acc
+        val head = a.type == "Hat" || a.type == "Hair" || a.type == "Face"
+        val anchor = if (head) 1 else 0
+        if (!partMatrix(anchor, pm)) return
+        val w = a.max[0] - a.min[0]
+        val h = a.max[1] - a.min[1]
+        val d = a.max[2] - a.min[2]
+        var px = 0f
+        var py = 0f
+        var pz = 0f
+        when (a.type) {
+            "Hat" -> py = 0.4f + h / 2f
+            "Hair" -> py = 0.8f - h / 2f
+            "Face" -> { py = 0.05f; pz = 0.62f - d / 2f }
+            "Neck" -> py = 1.1f
+            "Shoulder" -> py = 1.0f
+            "Front" -> { py = 0.1f; pz = 0.55f - d / 2f }
+            "Back" -> { py = 0.2f; pz = -0.55f + d / 2f }
+            "Waist" -> py = -0.9f
+        }
+        Matrix.translateM(pm, 0, px, py, pz)
+        Matrix.rotateM(pm, 0, 180f, 0f, 1f, 0f)   // o Roblox olha para -Z; aqui o avatar olha para +Z
+        Matrix.translateM(pm, 0,
+            -(a.min[0] + a.max[0]) / 2f, -(a.min[1] + a.max[1]) / 2f, -(a.min[2] + a.max[2]) / 2f)
+        useMesh(g.buf)
+        GLES20.glUniformMatrix4fv(uModel, 1, false, pm, 0)
+        if (g.tex != 0) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, g.tex)
+            GLES20.glUniform3f(uColor, 1f, 1f, 1f)
+            GLES20.glUniform1f(uUseTex, 3f)
+        } else {
+            GLES20.glUniform3f(uColor, 0.62f, 0.62f, 0.65f)
+            GLES20.glUniform1f(uUseTex, 0f)
+        }
+        GLES20.glUniform1f(uLight, 1f)
+        GLES20.glUniform1f(uGrid, 0f)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, g.count)
+        GLES20.glDisableVertexAttribArray(aT)
+    }
+
+    // corpo em blocos + roupas + acessórios; na morte desenha os pedaços soltos (Lego)
     private fun drawAvatar() {
+        syncAvatar()
         use(cube)
-        val swing = if (Play.moving) sin(Play.walkT * 11f) * 45f else 0f
-        val skin = 0xF5CD30
-        body(0f, 0.5f, 0f, 1f, 1f, 0.5f, 0x0D69AC)                          // torso
-        body(0f, 1.9f, 0f, 0.6f, 0.6f, 0.6f, skin)                         // cabeça
-        body(-0.22f, 2.0f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)            // olhos
-        body(0.22f, 2.0f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
-        body(-1.5f, 0.5f, 0f, 0.5f, 1f, 0.5f, skin, swing, 1.5f)           // braços
-        body(1.5f, 0.5f, 0f, 0.5f, 1f, 0.5f, skin, -swing, 1.5f)
-        body(-0.5f, -1.5f, 0f, 0.5f, 1f, 0.5f, 0x4B974B, -swing, -0.5f)    // pernas
-        body(0.5f, -1.5f, 0f, 0.5f, 1f, 0.5f, 0x4B974B, swing, -0.5f)
+        curTex = 0
+        for (i in 0..5) {
+            if (!partMatrix(i, pm)) continue
+            val o = halfs[i]
+            drawBox(pm, 0f, 0f, 0f, o[0], o[1], o[2], colOf(i))
+            if (i == 1) {   // olhos
+                drawBox(pm, -0.22f, 0.1f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
+                drawBox(pm, 0.22f, 0.1f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
+            }
+        }
+        // camadas de roupa (alpha), na ordem: calça, camisa, camiseta
+        if (pantsTex != 0 || shirtTex != 0 || tshirtTex != 0) {
+            GLES20.glEnable(GLES20.GL_BLEND)
+            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+            GLES20.glDepthFunc(GLES20.GL_LEQUAL)
+            GLES20.glDepthMask(false)
+            use(cube)
+            for (i in intArrayOf(0, 4, 5)) {
+                if (partMatrix(i, pm)) overlay(pm, i, pantsTex, 1.012f, false)
+            }
+            for (i in intArrayOf(0, 2, 3)) {
+                if (partMatrix(i, pm)) overlay(pm, i, shirtTex, 1.02f, false)
+            }
+            if (partMatrix(0, pm)) overlay(pm, 0, tshirtTex, 1.03f, true)
+            GLES20.glDepthMask(true)
+            GLES20.glDepthFunc(GLES20.GL_LESS)
+            GLES20.glDisable(GLES20.GL_BLEND)
+        }
+        for (g in accGl) drawAccessory(g)
+        GLES20.glUniform1f(uUseTex, 0f)
+        use(cube)
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -215,19 +530,46 @@ class Renderer : GLSurfaceView.Renderer {
         } else {
             lastNs = System.nanoTime()
         }
+        if (texPending.isNotEmpty()) {
+            for (k in texPending.keys.toList()) {
+                val b = texPending.remove(k) ?: continue
+                texIds[k] = upload(b)
+            }
+        }
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         val e = Cam.eye()
-        Matrix.setLookAtM(view, 0, e[0], e[1], e[2], Cam.target[0], Cam.target[1], Cam.target[2], 0f, 1f, 0f)
+        var tx = Cam.target[0]
+        var ty = Cam.target[1]
+        var tz = Cam.target[2]
+        if (Cam.shoulder != 0f) {
+            val rt = Cam.basis()[1]
+            val sh = Cam.shoulder
+            e[0] += rt[0] * sh; e[1] += rt[1] * sh; e[2] += rt[2] * sh
+            tx += rt[0] * sh; ty += rt[1] * sh; tz += rt[2] * sh
+        }
+        Matrix.setLookAtM(view, 0, e[0], e[1], e[2], tx, ty, tz, 0f, 1f, 0f)
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
+        synchronized(snap) { System.arraycopy(vp, 0, snap, 0, 16) }
         GLES20.glUseProgram(prog)
         GLES20.glUniformMatrix4fv(uVP, 1, false, vp, 0)
 
         use(cube)
         for (p in Scene.parts) {
+            val ts = p.props["Texture"] ?: p.props["TextureID"]
+            var tid = 0
+            if (!ts.isNullOrEmpty()) tid = texFor(ts)
+            if (tid != 0) {
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tid)
+                GLES20.glUniform3f(uHalf, p.sx * 0.5f, p.sy * 0.5f, p.sz * 0.5f)
+                GLES20.glUniform1f(uTile, p.props["StudsPerTile"]?.toFloatOrNull() ?: 0f)
+            }
+            curTex = tid
             p.model(model)
             draw(model, p.r, p.g, p.b, 1f, if (p.grid) 1f else 0f, GLES20.GL_TRIANGLES, 36)
         }
+        curTex = 0
 
         if (Play.active) {
             drawAvatar()
