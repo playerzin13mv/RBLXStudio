@@ -28,6 +28,53 @@ object GraphicsUi {
         else -> "Máxima: nuvens detalhadas e todos os efeitos"
     }
 
+    // Avatar Rig Type: R6 (6 blocos) ou R15 (15 peças). Não mexe na qualidade gráfica.
+    fun rigRow(act: Activity, onChange: () -> Unit): View {
+        val d = act.resources.displayMetrics.density
+        fun dp(v: Int) = (v * d).toInt()
+        val col = LinearLayout(act)
+        col.orientation = LinearLayout.VERTICAL
+        val title = TextView(act)
+        title.text = "Avatar Rig Type"
+        title.textSize = 12f
+        title.typeface = Typeface.DEFAULT_BOLD
+        title.setTextColor(0xFFB8B9BB.toInt())
+        title.setPadding(0, dp(8), 0, dp(4))
+        col.addView(title, LinearLayout.LayoutParams(-1, -2))
+        val row = LinearLayout(act)
+        row.orientation = LinearLayout.HORIZONTAL
+        val b6 = TextView(act)
+        val b15 = TextView(act)
+        val note = TextView(act)
+        fun paint() {
+            for ((v, on) in listOf(Pair(b6, !Settings.rigR15), Pair(b15, Settings.rigR15))) {
+                v.background = bg(act, if (on) 0xFF335FFF.toInt() else 0xFF2B2D30.toInt(), 8)
+                v.setTextColor(if (on) Color.WHITE else 0xFFCCCCCC.toInt())
+                v.typeface = if (on) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            }
+            note.text = if (Settings.rigR15) "R15: 15 peças, com cotovelo, joelho e pulso. Vale no próximo Play."
+            else "R6: 6 blocos, o corpo clássico. Vale no próximo Play."
+        }
+        for ((v, name) in listOf(Pair(b6, "R6"), Pair(b15, "R15"))) {
+            v.text = name
+            v.textSize = 12f
+            v.gravity = Gravity.CENTER
+            v.setPadding(dp(4), dp(10), dp(4), dp(10))
+            val lp = LinearLayout.LayoutParams(0, -2, 1f)
+            if (v === b6) lp.rightMargin = dp(6)
+            row.addView(v, lp)
+        }
+        b6.setOnClickListener { Settings.rigR15 = false; paint(); onChange() }
+        b15.setOnClickListener { Settings.rigR15 = true; paint(); onChange() }
+        col.addView(row, LinearLayout.LayoutParams(-1, -2))
+        note.textSize = 11f
+        note.setTextColor(0xFF8A8C8E.toInt())
+        note.setPadding(0, dp(4), 0, dp(8))
+        col.addView(note, LinearLayout.LayoutParams(-1, -2))
+        paint()
+        return col
+    }
+
     fun view(act: Activity, onChange: () -> Unit): View {
         val d = act.resources.displayMetrics.density
         fun dp(v: Int) = (v * d).toInt()

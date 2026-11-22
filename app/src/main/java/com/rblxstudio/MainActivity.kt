@@ -1130,6 +1130,7 @@ class MainActivity : Activity() {
     internal fun openSettings() {
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
+        box.addView(GraphicsUi.rigRow(this) { Settings.save(this) }, lp(MATCH, WRAP))
         box.addView(GraphicsUi.view(this) { Settings.save(this) }, lp(MATCH, WRAP))
         StyledDialog(this).setTitle("Settings")
             .setView(box)
@@ -1151,40 +1152,71 @@ class MainActivity : Activity() {
 
     private fun openFileUri(u: Uri) {
         if (needStop()) return
+        toast("Abrindo arquivo...")
         Thread {
-            var ok = false
             var name = "Arquivo"
-            var text = ""
+            var data: ByteArray? = null
             try {
                 contentResolver.query(u, null, null, null, null)?.use { c ->
                     val ix = c.getColumnIndex("_display_name")
                     if (ix >= 0 && c.moveToFirst()) name = c.getString(ix) ?: name
                 }
-                if (name.endsWith(".json", true)) {
-                    text = contentResolver.openInputStream(u)?.use { it.bufferedReader().readText() } ?: ""
-                    ok = text.isNotEmpty()
-                }
+                data = contentResolver.openInputStream(u)?.use { it.readBytes() }
             } catch (e: Exception) {
-                ok = false
+                data = null
             }
-            runOnUiThread {
-                if (!ok) {
-                    toast("Só abro arquivos .json salvos por este app (.rbxl ainda não)")
-                } else {
-                    try {
-                        Storage.fromJson(org.json.JSONObject(text))
-                        History.clear()
-                        placeName = null
-                        lastSel = null
-                        Editor.select(null)
-                        menu.hide()
-                        toast("Aberto: " + name)
-                    } catch (e: Exception) {
-                        toast("Esse arquivo não é um lugar válido")
+            val raw = data
+            if (raw == null || raw.isEmpty()) {
+                runOnUiThread { toast("Não consegui ler esse arquivo") }
+                return@Thread
+            }
+            // lugar salvo por este app (.json)
+            val first = raw.firstOrNull { it.toInt() > 32 }?.toInt()?.toChar() ?: ' '
+            if (name.endsWith(".json", true) || first == '{') {
+                try {
+                    val js = org.json.JSONObject(String(raw, Charsets.UTF_8))
+                    runOnUiThread {
+                        try {
+                            Storage.fromJson(js)
+                            afterOpen(name, null)
+                        } catch (e: Exception) {
+                            toast("Esse arquivo não é um lugar válido")
+                        }
                     }
+                } catch (e: Exception) {
+                    runOnUiThread { toast("Esse arquivo não é um lugar válido") }
+                }
+                return@Thread
+            }
+            // arquivos do Roblox: .rbxl / .rbxlx (lugar), .rbxm / .rbxmx (modelo); também aceita .rblx / .rblxm
+            val tree = RbxFile.parse(raw)
+            if (tree == null || tree.isEmpty()) {
+                val why = RbxFile.lastError.ifEmpty { "formato desconhecido" }
+                runOnUiThread { toast("Não consegui abrir " + name + ": " + why) }
+                return@Thread
+            }
+            val place = PlaceImport.isPlace(tree)
+            runOnUiThread {
+                try {
+                    val res = PlaceImport.apply(tree, place)
+                    afterOpen(name, (if (place) "Lugar aberto: " else "Modelo inserido: ") + res.text())
+                } catch (e: Throwable) {
+                    toast("Erro ao importar: " + (e.message ?: e.javaClass.simpleName))
                 }
             }
         }.start()
+    }
+
+    // depois de abrir/importar algo
+    private fun afterOpen(name: String, msg: String?) {
+        History.clear()
+        placeName = null
+        lastSel = null
+        Editor.select(null)
+        menu.hide()
+        val m = msg ?: ("Aberto: " + name)
+        toast(m)
+        Out.add(m, 0)
     }
 
     internal fun openByPlaceId() {
@@ -1217,7 +1249,8 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // lugar da conta do Roblox: vira um projeto novo (Baseplate) com o nome e o ícone do lugar
+    // lugar da conta do Roblox: baixa o mapa de verdade (só funciona para lugares seus ou "copy unlocked");
+    // se não der, abre um projeto novo (Baseplate) com o nome e o ícone do lugar
     internal fun openCloudPlace(p: RobloxApi.PlaceInfo) {
         if (needStop()) return
         val nm = Storage.cleanName(p.name)
@@ -1225,17 +1258,46 @@ class MainActivity : Activity() {
             openSaved(nm)
             return
         }
-        Scene.applyTemplate("Baseplate")
-        History.clear()
-        lastSel = null
-        Editor.select(null)
-        try {
-            placeName = Storage.save(this, nm)
-            Storage.setCloud(this, nm, p.placeId, p.universeId)
-        } catch (e: Exception) {
-            placeName = null
-        }
-        menu.hide()
-        toast("Aberto: " + p.name + " (o conteúdo do Roblox ainda não é importado)")
+        toast("Baixando " + p.name + "...")
+        Thread {
+            var tree: List<RNode>? = null
+            var err = ""
+            try {
+                RobloxAuth.restoreSession(this)
+                val raw = Avatar.fetchAsset(p.placeId)
+                tree = RbxFile.parse(raw)
+                if (tree == null || tree.isEmpty()) err = RbxFile.lastError.ifEmpty { "arquivo vazio" }
+            } catch (e: Exception) {
+                err = e.message ?: e.javaClass.simpleName
+            }
+            val got = tree
+            runOnUiThread {
+                var note = ""
+                if (got != null && got.isNotEmpty()) {
+                    try {
+                        val res = PlaceImport.apply(got, true)
+                        note = "Mapa carregado: " + res.text()
+                    } catch (e: Throwable) {
+                        err = e.message ?: e.javaClass.simpleName
+                    }
+                }
+                if (note.isEmpty()) {
+                    Scene.applyTemplate("Baseplate")
+                    note = "Não consegui baixar o mapa (" + err + "). Abri um Baseplate; use Open File... com o .rbxl"
+                }
+                History.clear()
+                lastSel = null
+                Editor.select(null)
+                try {
+                    placeName = Storage.save(this, nm)
+                    Storage.setCloud(this, nm, p.placeId, p.universeId)
+                } catch (e: Exception) {
+                    placeName = null
+                }
+                menu.hide()
+                toast(note)
+                Out.add(note, 0)
+            }
+        }.start()
     }
 }

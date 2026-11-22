@@ -226,7 +226,7 @@ object Avatar {
     }
 
     // ---------- download ----------
-    private fun bytes(u: String, useCookie: Boolean = true): ByteArray {
+    private fun bytes(u: String, useCookie: Boolean = true, web: Boolean = false): ByteArray {
         var url = u
         for (hop in 0..4) {
             val c = URL(url).openConnection() as HttpURLConnection
@@ -234,6 +234,12 @@ object Avatar {
             c.readTimeout = 20000
             c.instanceFollowRedirects = false
             c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) RBLXStudio/0.8")
+            if (web) {
+                // as miniaturas do site respondem 403 sem estes cabeçalhos de navegador
+                c.setRequestProperty("Accept", "application/json, text/plain, */*")
+                c.setRequestProperty("Referer", "https://www.roblox.com/")
+                c.setRequestProperty("Origin", "https://www.roblox.com")
+            }
             val ck = RobloxAuth.cookie
             val host = URL(url).host ?: ""
             if (useCookie && ck.isNotEmpty() && host.endsWith(".roblox.com")) c.setRequestProperty("Cookie", ".ROBLOSECURITY=" + ck)
@@ -286,6 +292,9 @@ object Avatar {
             throw Exception((err?.message ?: "sem resposta") + " / " + (e.message ?: e.javaClass.simpleName))
         }
     }
+
+    // baixa qualquer asset pelo ID (usado também para abrir lugares da conta)
+    fun fetchAsset(id: Long): ByteArray = asset(id)
 
     // Procura IDs de imagem/malha dentro do arquivo do item (XML ou rbxm binário)
     private fun refs(raw: ByteArray): List<Long> {
@@ -389,8 +398,8 @@ object Avatar {
         "RightShoulderAttachment" -> floatArrayOf(0f, 1.0f, 0.8f, 0f)
         "LeftCollarAttachment" -> floatArrayOf(0f, -0.9f, 1.0f, 0f)
         "RightCollarAttachment" -> floatArrayOf(0f, 0.9f, 1.0f, 0f)
-        "BodyFrontAttachment" -> floatArrayOf(0f, 0f, 0.4f, -0.5f)
-        "BodyBackAttachment" -> floatArrayOf(0f, 0f, 0.4f, 0.5f)
+        "BodyFrontAttachment" -> floatArrayOf(0f, 0f, 0f, -0.5f)
+        "BodyBackAttachment" -> floatArrayOf(0f, 0f, 0f, 0.5f)
         "WaistFrontAttachment" -> floatArrayOf(0f, 0f, -0.8f, -0.5f)
         "WaistBackAttachment" -> floatArrayOf(0f, 0f, -0.8f, 0.5f)
         "WaistCenterAttachment" -> floatArrayOf(0f, 0f, -0.8f, 0f)
@@ -550,29 +559,38 @@ object Avatar {
 
     private fun loadAccessory3d(itemId: Long, name: String, kind: String): Acc? {
         var imageUrl = ""
-        var last: Exception? = null
-        // 1) API nova (sem cookie primeiro: com cookie vencido ela devolve 403)
-        for (k in 0 until 8) {
-            var st = ""
-            try {
-                val j = JSONObject(String(bytes("https://thumbnails.roblox.com/v1/assets-thumbnail-3d?assetId=" + itemId, false), Charsets.UTF_8))
-                st = j.optString("state")
-                if (st == "Completed") {
-                    imageUrl = j.optString("imageUrl")
+        val steps = ArrayList<String>()
+        fun msg(e: Exception) = e.message ?: e.javaClass.simpleName
+        // 1) API nova: sem login e depois com login (cada uma dá 403 em situações diferentes)
+        val modes = if (RobloxAuth.cookie.isNotEmpty()) listOf(false, true) else listOf(false)
+        for (withCookie in modes) {
+            if (imageUrl.isNotEmpty()) break
+            val tag = if (withCookie) "com login" else "sem login"
+            for (k in 0 until 8) {
+                var st = ""
+                try {
+                    val j = JSONObject(String(bytes("https://thumbnails.roblox.com/v1/assets-thumbnail-3d?assetId=" + itemId, withCookie, true), Charsets.UTF_8))
+                    st = j.optString("state")
+                    if (st == "Completed") {
+                        imageUrl = j.optString("imageUrl")
+                        break
+                    }
+                } catch (e: Exception) {
+                    steps.add(tag + ": " + msg(e))
                     break
                 }
-            } catch (e: Exception) {
-                last = e
-                break
+                if (st == "Error" || st == "Blocked") {
+                    steps.add(tag + ": " + st)
+                    break
+                }
+                Thread.sleep(1500)
             }
-            if (st == "Error" || st == "Blocked") break
-            Thread.sleep(1500)
         }
         // 2) endereço antigo do site
         if (imageUrl.isEmpty()) {
             try {
                 for (k in 0 until 6) {
-                    val j = JSONObject(String(bytes("https://www.roblox.com/asset-thumbnail-3d/json?assetId=" + itemId, false), Charsets.UTF_8))
+                    val j = JSONObject(String(bytes("https://www.roblox.com/asset-thumbnail-3d/json?assetId=" + itemId, false, true), Charsets.UTF_8))
                     val u = j.optString("Url", "")
                     if (u.isNotEmpty() && j.optBoolean("Final", true)) {
                         imageUrl = u
@@ -581,23 +599,27 @@ object Avatar {
                     Thread.sleep(1500)
                 }
             } catch (e: Exception) {
-                if (last == null) last = e
+                steps.add("site antigo: " + msg(e))
             }
         }
         if (imageUrl.isEmpty()) {
-            if (last != null) throw last
-            return null
+            throw Exception(if (steps.isEmpty()) "sem resposta" else steps.joinToString("; "))
         }
-        val info = JSONObject(String(bytes(imageUrl, false), Charsets.UTF_8))
-        val obj = String(bytes(cdn(info.getString("obj")), false), Charsets.UTF_8)
+        var obj = ""
         var tex: Bitmap? = null
-        val texs = info.optJSONArray("textures")
-        if (texs != null && texs.length() > 0) {
-            try {
-                tex = decodeBmp(bytes(cdn(texs.getString(0)), false))
-            } catch (e: Exception) {
-                tex = null
+        try {
+            val info = JSONObject(String(bytes(imageUrl, false, true), Charsets.UTF_8))
+            obj = String(bytes(cdn(info.getString("obj")), false, true), Charsets.UTF_8)
+            val texs = info.optJSONArray("textures")
+            if (texs != null && texs.length() > 0) {
+                try {
+                    tex = decodeBmp(bytes(cdn(texs.getString(0)), false, true))
+                } catch (e: Exception) {
+                    tex = null
+                }
             }
+        } catch (e: Exception) {
+            throw Exception("baixar o 3D: " + msg(e))
         }
         val mesh = parseObj(obj) ?: return null
         return Acc(name, kind, mesh.data, mesh.min, mesh.max, tex)

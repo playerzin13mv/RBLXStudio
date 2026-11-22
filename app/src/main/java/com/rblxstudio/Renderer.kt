@@ -356,8 +356,9 @@ class Renderer : GLSurfaceView.Renderer {
             }
         }
         val h = handle ?: return
-        if (!partMatrix(2, pm)) return
-        Matrix.translateM(pm, 0, 0f, -1.0f, 0f)
+        val rig = Rig.current()
+        if (!partMatrix(rig.handIdx, pm)) return
+        Matrix.translateM(pm, 0, 0f, rig.handDy, 0f)
         Matrix.rotateM(pm, 0, 90f, 1f, 0f, 0f)
         Matrix.scaleM(pm, 0, h.sx / 2f, h.sy / 2f, h.sz / 2f)
         use(cube)
@@ -483,19 +484,35 @@ class Renderer : GLSurfaceView.Renderer {
         }
     }
 
-    // transformação (sem escala) do centro de uma parte do corpo: 0 torso, 1 cabeça, 2 braço dir, 3 braço esq, 4 perna dir, 5 perna esq
-    private val offs = arrayOf(
-        floatArrayOf(0f, 0.5f, 0f), floatArrayOf(0f, 1.9f, 0f),
-        floatArrayOf(-1.5f, 0.5f, 0f), floatArrayOf(1.5f, 0.5f, 0f),
-        floatArrayOf(-0.5f, -1.5f, 0f), floatArrayOf(0.5f, -1.5f, 0f)
-    )
-    private val halfs = arrayOf(
-        floatArrayOf(1f, 1f, 0.5f), floatArrayOf(0.6f, 0.6f, 0.6f),
-        floatArrayOf(0.5f, 1f, 0.5f), floatArrayOf(0.5f, 1f, 0.5f),
-        floatArrayOf(0.5f, 1f, 0.5f), floatArrayOf(0.5f, 1f, 0.5f)
-    )
+    // ---------- corpo (rig R6 ou R15, animado por Anim) ----------
+    private val rigW = Array(Rig.MAX) { FloatArray(16) }
+    private val rigDone = BooleanArray(Rig.MAX)
+    private val rigRoot = FloatArray(16)
 
+    // matriz da peça i no espaço do personagem (cadeia de juntas, sem a posição do personagem)
+    private fun rigWorld(rig: Rig, i: Int): FloatArray {
+        val w = rigW[i]
+        if (rigDone[i]) return w
+        val p = rig.parts[i]
+        if (p.parent >= 0) System.arraycopy(rigWorld(rig, p.parent), 0, w, 0, 16) else Matrix.setIdentityM(w, 0)
+        val ax = Anim.ang[i * 3]
+        val ay = Anim.ang[i * 3 + 1]
+        val az = Anim.ang[i * 3 + 2]
+        if (ax != 0f || ay != 0f || az != 0f) {
+            Matrix.translateM(w, 0, p.jx, p.jy, p.jz)
+            if (ay != 0f) Matrix.rotateM(w, 0, ay, 0f, 1f, 0f)
+            if (az != 0f) Matrix.rotateM(w, 0, az, 0f, 0f, 1f)
+            if (ax != 0f) Matrix.rotateM(w, 0, ax, 1f, 0f, 0f)
+            Matrix.translateM(w, 0, -p.jx, -p.jy, -p.jz)
+        }
+        rigDone[i] = true
+        return w
+    }
+
+    // centro da peça i no mundo (sem escala); na morte usa os pedaços soltos
     private fun partMatrix(i: Int, out: FloatArray): Boolean {
+        val rig = Rig.current()
+        if (i < 0 || i >= rig.parts.size) return false
         Matrix.setIdentityM(out, 0)
         if (Play.dead) {
             val fr = Play.frags.firstOrNull { it.part == i } ?: return false
@@ -505,30 +522,21 @@ class Renderer : GLSurfaceView.Renderer {
             Matrix.rotateM(out, 0, fr.rz, 0f, 0f, 1f)
             return true
         }
-        val swing = if (Play.moving) sin(Play.walkT * 11f) * 45f else 0f
-        val o = offs[i]
-        var ang = 0f
-        var pivot = o[1]
-        when (i) {
-            2 -> {
-                ang = if (Play.equipped != null) -90f + 70f * sin(PI.toFloat() * (1f - Play.toolSwing)) else swing
-                pivot = 1.5f
-            }
-            3 -> { ang = -swing; pivot = 1.5f }
-            4 -> { ang = -swing; pivot = -0.5f }
-            5 -> { ang = swing; pivot = -0.5f }
-        }
-        Matrix.translateM(out, 0, Play.x, Play.y, Play.z)
-        Matrix.rotateM(out, 0, Play.facing, 0f, 1f, 0f)
-        Matrix.translateM(out, 0, o[0], pivot, o[2])
-        if (ang != 0f) Matrix.rotateM(out, 0, ang, 1f, 0f, 0f)
-        Matrix.translateM(out, 0, 0f, o[1] - pivot, 0f)
+        val p = rig.parts[i]
+        val w = rigWorld(rig, i)
+        Matrix.setIdentityM(rigRoot, 0)
+        Matrix.translateM(rigRoot, 0, Play.x, Play.y, Play.z)
+        Matrix.rotateM(rigRoot, 0, Play.facing, 0f, 1f, 0f)
+        Matrix.multiplyMM(out, 0, rigRoot, 0, w, 0)
+        Matrix.translateM(out, 0, p.cx, p.cy, p.cz)
         return true
     }
 
     private fun colOf(i: Int): Int {
+        val rig = Rig.current()
+        val role = if (i >= 0 && i < rig.parts.size) rig.parts[i].role else 0
         val c = Avatar.cols
-        return when (i) {
+        return when (role) {
             0 -> c[1]
             1 -> c[0]
             2 -> c[3]
@@ -579,13 +587,34 @@ class Renderer : GLSurfaceView.Renderer {
         return true
     }
 
-    private fun overlay(base: FloatArray, part: Int, tex: Int, grow: Float, whole: Boolean) {
+    // peças do R15 usam só uma fatia (de cima para baixo) do desenho da roupa do R6
+    private fun sliceFaces(rp: RigPart) {
+        if (rp.t0 <= 0f && rp.t1 >= 1f) return
+        for (k in 0..5) {
+            if (faceArr[k * 4 + 2] <= 0f) continue
+            if (k == 2) {
+                if (rp.t0 > 0f) faceArr[k * 4 + 2] = 0f
+                continue
+            }
+            if (k == 3) {
+                if (rp.t1 < 1f) faceArr[k * 4 + 2] = 0f
+                continue
+            }
+            val y = faceArr[k * 4 + 1]
+            val hh = faceArr[k * 4 + 3]
+            faceArr[k * 4 + 1] = y + hh * rp.t0
+            faceArr[k * 4 + 3] = hh * (rp.t1 - rp.t0)
+        }
+    }
+
+    private fun overlay(base: FloatArray, rp: RigPart, tex: Int, grow: Float, whole: Boolean) {
         if (tex == 0) return
         if (whole) {
             java.util.Arrays.fill(faceArr, 0f)
             faceArr[16] = 0f; faceArr[17] = 0f; faceArr[18] = 1f; faceArr[19] = 1f   // só a frente
-        } else if (!layout(part)) return
-        val h = halfs[part]
+        } else if (!layout(rp.role)) return
+        sliceFaces(rp)
+        val h = floatArrayOf(rp.hx, rp.hy, rp.hz)
         System.arraycopy(base, 0, pm2, 0, 16)
         Matrix.translateM(pm2, 0, 0f, 0f, 0f)
         Matrix.scaleM(pm2, 0, h[0] * grow, h[1] * grow, h[2] * grow)
@@ -622,7 +651,8 @@ class Renderer : GLSurfaceView.Renderer {
             // encaixe pelo Attachment do próprio item: corpo -> ponto do Roblox -> inverso do Attachment do Handle
             if (!partMatrix(pl[0].toInt(), pm)) return
             Matrix.rotateM(pm, 0, 180f, 0f, 1f, 0f)   // o Roblox olha para -Z; aqui o avatar olha para +Z
-            Matrix.translateM(pm, 0, pl[1], pl[2], pl[3])
+            val dy = if (pl[0].toInt() == 0) Rig.current().torsoDy else 0f
+            Matrix.translateM(pm, 0, pl[1], pl[2] - dy, pl[3])
             Matrix.multiplyMM(pm3, 0, pm, 0, inv, 0)
             useMesh(g.buf)
             GLES20.glUniformMatrix4fv(uModel, 1, false, pm3, 0)
@@ -649,6 +679,7 @@ class Renderer : GLSurfaceView.Renderer {
             "Back" -> { py = 0.2f; pz = -0.55f + d / 2f }
             "Waist" -> py = -0.9f
         }
+        if (anchor == 0) py -= Rig.current().torsoDy
         Matrix.translateM(pm, 0, px, py, pz)
         Matrix.rotateM(pm, 0, 180f, 0f, 1f, 0f)   // o Roblox olha para -Z; aqui o avatar olha para +Z
         if (a.type == "Head") { val sc = 1.2f / maxOf(h, 0.01f); Matrix.scaleM(pm, 0, sc, sc, sc) }
@@ -681,11 +712,13 @@ class Renderer : GLSurfaceView.Renderer {
         use(cube)
         curTex = 0
         val hasHead = accGl.any { it.acc.type == "Head" }
-        for (i in 0..5) {
+        val rig = Rig.current()
+        java.util.Arrays.fill(rigDone, false)
+        for (i in rig.parts.indices) {
             if (!partMatrix(i, pm)) continue
-            val o = halfs[i]
+            val o = rig.parts[i]
             if (i == 1 && hasHead) continue   // cabeça de malha substitui o cubo
-            drawBox(pm, 0f, 0f, 0f, o[0], o[1], o[2], colOf(i))
+            drawBox(pm, 0f, 0f, 0f, o.hx, o.hy, o.hz, colOf(i))
             if (i == 1 && faceTex == 0) {   // olhos padrão (sem rosto do avatar)
                 drawBox(pm, -0.22f, 0.1f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
                 drawBox(pm, 0.22f, 0.1f, 0.61f, 0.07f, 0.1f, 0.02f, 0x111111)
@@ -698,14 +731,19 @@ class Renderer : GLSurfaceView.Renderer {
             GLES20.glDepthFunc(GLES20.GL_LEQUAL)
             GLES20.glDepthMask(false)
             use(cube)
-            for (i in intArrayOf(0, 4, 5)) {
-                if (partMatrix(i, pm)) overlay(pm, i, pantsTex, 1.012f, false)
+            for (i in rig.parts.indices) {
+                val rp = rig.parts[i]
+                if ((rp.role == 0 || rp.role == 4 || rp.role == 5) && partMatrix(i, pm)) overlay(pm, rp, pantsTex, 1.012f, false)
             }
-            for (i in intArrayOf(0, 2, 3)) {
-                if (partMatrix(i, pm)) overlay(pm, i, shirtTex, 1.02f, false)
+            for (i in rig.parts.indices) {
+                val rp = rig.parts[i]
+                if ((rp.role == 0 || rp.role == 2 || rp.role == 3) && partMatrix(i, pm)) overlay(pm, rp, shirtTex, 1.02f, false)
             }
-            if (partMatrix(0, pm)) overlay(pm, 0, tshirtTex, 1.03f, true)
-            if (!hasHead && partMatrix(1, pm)) overlay(pm, 1, faceTex, 1.02f, true)
+            for (i in rig.parts.indices) {
+                val rp = rig.parts[i]
+                if (rp.role == 0 && partMatrix(i, pm)) overlay(pm, rp, tshirtTex, 1.03f, true)
+            }
+            if (!hasHead && partMatrix(1, pm)) overlay(pm, rig.parts[1], faceTex, 1.02f, true)
             GLES20.glDepthMask(true)
             GLES20.glDepthFunc(GLES20.GL_LESS)
             GLES20.glDisable(GLES20.GL_BLEND)

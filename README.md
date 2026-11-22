@@ -1,3 +1,5 @@
+<p align="center"><img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="Ícone do RBLXStudio"></p>
+
 # RBLXStudio
 
 Versão do Roblox Studio para celular (Android), feita em Kotlin + OpenGL ES.
@@ -8,6 +10,24 @@ Versão do Roblox Studio para celular (Android), feita em Kotlin + OpenGL ES.
 - Salvar / Abrir lugares (File), CanCollide, Focus (aba VIEW)
 - Ícones vetoriais no lugar dos emojis e ícone do app (logo do Roblox Studio)
 - **Login com conta do Roblox** (OAuth 2.0 + PKCE)
+
+## Novidades da v0.14
+- **Abrir mapas do Roblox**: Open File... agora lê `.rbxl` / `.rbxlx` (lugar inteiro) e `.rbxm` / `.rbxmx` (modelo, que é somado ao que já está aberto). Também aceita os nomes `.rblx` e `.rblxm`. Vêm as peças (posição, tamanho, rotação, cor, Anchored, CanCollide), scripts, Sounds, GUIs, Values e Tools. Modelos e pastas do Workspace viram peças soltas.
+- **Open by Place ID / My Games** tentam baixar o mapa de verdade (funciona para lugares seus ou "copy unlocked", com o login feito). Se o Roblox negar, abre um Baseplate e avisa o motivo.
+- **R6 e R15**: Game Settings > Avatar Rig Type (não mexe na qualidade gráfica). R15 tem 15 peças com cotovelo, joelho e pulso; roupas clássicas são fatiadas entre as peças.
+- **Animações**: parado (respiração), andar, **pular**, cair, voar e Tool na mão, com transição suave, para R6 e R15.
+- **Acessórios**: Red Pixel Heart e outros itens de "Front" / "Back" agora ficam no centro do peito/costas. O plano B 3D manda cabeçalhos de navegador, tenta sem e com login e o relatório do avatar mostra exatamente qual passo deu erro.
+- Limite conhecido: malhas **versão 6/7** (formato novo do Roblox, comprimido) ainda não são lidas; esses itens dependem do plano B 3D.
+- Limites do importador: terreno, Union/MeshPart como caixas, formas (Ball/Cylinder) viram blocos, arquivos com compressão ZSTD ainda não abrem, máximo de 30000 peças.
+
+## Roadmap
+- [x] v0.14: importar .rbxl/.rbxm, mapas por Place ID, R6/R15, animações base e pulo
+- [ ] Animações customizadas (KeyframeSequence / AnimationId, `Humanoid:LoadAnimation`) e mais animações R6/R15
+- [ ] Malhas versão 6/7 (Draco) para todos os acessórios; roupas em camadas
+- [ ] Mais recursos de script (boost estilo Sonic, voo, BodyVelocity, Raycast, TweenService)
+- [ ] Barra de qualidade gráfica no estilo do Roblox
+- [ ] Ícone do Empty Place mais fiel ao original
+- [ ] Terreno, transparência, formas (esfera, cilindro, cunha) e suporte a ZSTD
 
 ## Novidades da v0.13
 - Tela inicial no estilo do Roblox Studio: "Oi, nome" com sua foto, abas Home, Recent, My Games e Group Games (lugares da sua conta com o ícone de cada um; sem ícone aparece o globo verde), Open File... e Open by Place ID, engrenagem de configurações.
@@ -58,7 +78,7 @@ end)
 - **Movimento**: Joystick, D-Pad ou Tocar para mover
 - **Morte igual ao Roblox**: o personagem se despedaça em blocos e reaparece depois de 3 s (Reiniciar personagem faz o mesmo)
 
-Acessórios: a posição é aproximada pelo tipo do item. Malhas em formatos muito novos (v4/v5) ainda não são lidas; nesse caso o item é ignorado e aparece um aviso no Output.
+Acessórios: malhas v1 a v5 são lidas; versões 6/7 usam o plano B 3D (veja a v0.14).
 
 ## Configurar o login com Roblox
 1. Abra https://create.roblox.com/dashboard/credentials (aba **OAuth 2.0 Apps**) e crie um app.

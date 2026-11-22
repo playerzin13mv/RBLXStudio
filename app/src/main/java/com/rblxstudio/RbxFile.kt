@@ -12,6 +12,9 @@ class RNode(val cls: String) {
     val str = HashMap<String, String>()
     val vec = HashMap<String, FloatArray>()   // Vector3: x y z
     val cf = HashMap<String, FloatArray>()    // CFrame: x y z r00 r01 r02 r10 r11 r12 r20 r21 r22
+    val num = HashMap<String, Float>()        // int, float e enum (Shape, Material...)
+    val bool = HashMap<String, Boolean>()     // Anchored, CanCollide...
+    val col = HashMap<String, FloatArray>()   // Color3 / Color3uint8: r g b de 0 a 1
 
     fun find(pred: (RNode) -> Boolean): RNode? {
         if (pred(this)) return this
@@ -41,12 +44,39 @@ class RNode(val cls: String) {
 object RbxFile {
     private class Cls(val id: Int, val name: String, val refs: IntArray)
 
+    // motivo da última falha de leitura (para mostrar ao usuário)
+    @Volatile var lastError = ""
+
+    // as 24 rotações "especiais" do formato binário: direita = N[(id-1)/6], cima = N[(id-1)%6], trás = direita x cima
+    private val NORMALS = arrayOf(
+        floatArrayOf(1f, 0f, 0f), floatArrayOf(0f, 1f, 0f), floatArrayOf(0f, 0f, 1f),
+        floatArrayOf(-1f, 0f, 0f), floatArrayOf(0f, -1f, 0f), floatArrayOf(0f, 0f, -1f)
+    )
+
+    private fun specialRot(id: Int): FloatArray {
+        val a = id - 1
+        val rt = NORMALS[(a / 6).coerceIn(0, 5)]
+        val up = NORMALS[(a % 6).coerceIn(0, 5)]
+        val bk = floatArrayOf(
+            rt[1] * up[2] - rt[2] * up[1],
+            rt[2] * up[0] - rt[0] * up[2],
+            rt[0] * up[1] - rt[1] * up[0]
+        )
+        // linhas da matriz: colunas são direita, cima, trás
+        return floatArrayOf(rt[0], up[0], bk[0], rt[1], up[1], bk[1], rt[2], up[2], bk[2])
+    }
+
     fun parse(raw: ByteArray): List<RNode>? {
+        lastError = ""
         return try {
             if (raw.size > 32 && String(raw, 0, 8, Charsets.ISO_8859_1) == "<roblox!") parseBin(raw)
             else if (raw.size > 20 && String(raw, 0, 10, Charsets.ISO_8859_1).trimStart().startsWith("<roblox")) parseXml(raw)
-            else null
+            else {
+                lastError = "não é um arquivo do Roblox (.rbxl, .rbxm, .rbxlx ou .rbxmx)"
+                null
+            }
         } catch (e: Throwable) {
+            lastError = e.message ?: e.javaClass.simpleName
             null
         }
     }
@@ -134,6 +164,7 @@ object RbxFile {
         val classes = HashMap<Int, Cls>()
         val nodes = HashMap<Int, RNode>()
         val parents = ArrayList<IntArray>()
+        var zstd = false
         while (p + 16 <= raw.size) {
             val tag = String(raw, p, 4, Charsets.ISO_8859_1)
             val comp = bb.getInt(p + 4)
@@ -142,6 +173,12 @@ object RbxFile {
             if (uncomp < 0 || comp < 0) break
             val len = if (comp == 0) uncomp else comp
             if (len < 0 || p + len > raw.size) break
+            if (comp != 0 && len >= 4 && raw[p] == 0x28.toByte() && raw[p + 1] == 0xB5.toByte() && raw[p + 2] == 0x2F.toByte() && raw[p + 3] == 0xFD.toByte()) {
+                // bloco comprimido com ZSTD (arquivos mais novos): ainda não sei ler
+                zstd = true
+                p += len
+                continue
+            }
             val data = if (comp == 0) raw.copyOfRange(p, p + len) else lz4(raw, p, len, uncomp)
             p += len
             if (tag.startsWith("END")) break
@@ -183,6 +220,8 @@ object RbxFile {
             }
             i += 2
         }
+        if (zstd && nodes.isEmpty()) lastError = "arquivo comprimido com ZSTD (ainda não suportado)"
+        else if (zstd) lastError = "parte do arquivo usa ZSTD e foi ignorada"
         return nodes.values.filter { it.parent == null }
     }
 
@@ -201,6 +240,42 @@ object RbxFile {
                     nd.str[prop] = s
                 }
             }
+            0x02 -> {
+                for (k in 0 until n) {
+                    val v = r.b.get().toInt() != 0
+                    nodes[cls.refs[k]]?.bool?.put(prop, v)
+                }
+            }
+            0x03 -> {
+                val v = r.zig(n)
+                for (k in 0 until n) nodes[cls.refs[k]]?.num?.put(prop, v[k].toFloat())
+            }
+            0x04 -> {
+                val v = r.floats(n)
+                for (k in 0 until n) nodes[cls.refs[k]]?.num?.put(prop, v[k])
+            }
+            0x12 -> {
+                val v = r.ints(n)
+                for (k in 0 until n) nodes[cls.refs[k]]?.num?.put(prop, v[k].toFloat())
+            }
+            0x0C -> {
+                val cr = r.floats(n)
+                val cg = r.floats(n)
+                val cb = r.floats(n)
+                for (k in 0 until n) nodes[cls.refs[k]]?.col?.put(prop, floatArrayOf(cr[k], cg[k], cb[k]))
+            }
+            0x1A -> {
+                val br = ByteArray(n)
+                val bg = ByteArray(n)
+                val bb = ByteArray(n)
+                r.b.get(br)
+                r.b.get(bg)
+                r.b.get(bb)
+                for (k in 0 until n) {
+                    nodes[cls.refs[k]]?.col?.put(prop, floatArrayOf(
+                        (br[k].toInt() and 255) / 255f, (bg[k].toInt() and 255) / 255f, (bb[k].toInt() and 255) / 255f))
+                }
+            }
             0x0E -> {
                 val xs = r.floats(n)
                 val ys = r.floats(n)
@@ -215,11 +290,9 @@ object RbxFile {
                         val m = FloatArray(9)
                         for (q in 0 until 9) m[q] = r.b.float
                         rots.add(m)
-                    } else if (id == 0x02) {
-                        rots.add(floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f))
                     } else {
-                        // rotação "especial" que eu ainda não conheço: trata como sem rotação
-                        rots.add(floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f))
+                        // rotação "especial" (alinhada aos eixos): id 2 = sem rotação
+                        rots.add(specialRot(id))
                     }
                 }
                 val xs = r.floats(n)
@@ -275,6 +348,19 @@ object RbxFile {
                         "Content" -> {
                             val u = pe.getElementsByTagName("url")
                             if (u.length > 0) n.str[pn] = u.item(0).textContent.trim()
+                        }
+                        "bool" -> n.bool[pn] = pe.textContent.trim().equals("true", true)
+                        "int", "float", "double", "token", "int64" -> {
+                            val fv = pe.textContent.trim().toFloatOrNull()
+                            if (fv != null) n.num[pn] = fv
+                        }
+                        "Color3uint8", "Color3" -> {
+                            if (pe.getElementsByTagName("R").length > 0) {
+                                n.col[pn] = floatArrayOf(num(pe, "R"), num(pe, "G"), num(pe, "B"))
+                            } else {
+                                val pk = pe.textContent.trim().toLongOrNull()
+                                if (pk != null) n.col[pn] = floatArrayOf(((pk shr 16) and 255L) / 255f, ((pk shr 8) and 255L) / 255f, (pk and 255L) / 255f)
+                            }
                         }
                         "Vector3" -> n.vec[pn] = floatArrayOf(num(pe, "X"), num(pe, "Y"), num(pe, "Z"))
                         "CoordinateFrame" -> n.cf[pn] = floatArrayOf(

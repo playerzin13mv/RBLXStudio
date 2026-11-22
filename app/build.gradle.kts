@@ -9,8 +9,8 @@ android {
         applicationId = "com.rblxstudio"
         minSdk = 24
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.13"
+        versionCode = 14
+        versionName = "0.14"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

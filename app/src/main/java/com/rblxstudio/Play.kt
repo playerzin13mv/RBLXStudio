@@ -68,6 +68,8 @@ object Play {
     @Volatile var moveDirX = 0f
     @Volatile var moveDirZ = 0f
     private var grounded = false
+    @Volatile var onGround = false
+    @Volatile var airTime = 0f      // há quanto tempo está no ar (para a animação de pulo)
     private var spawnX = 0f
     private var spawnY = 0f
     private var spawnZ = 0f
@@ -102,7 +104,12 @@ object Play {
             ch.add(CharInst("Part", "HumanoidRootPart"))
             ch.add(CharInst("Humanoid", "Humanoid"))
             ch.add(CharInst("Part", "Head"))
-            for (n in listOf("Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg")) ch.add(CharInst("Part", n))
+            val bodyNames = if (Settings.rigR15)
+                listOf("UpperTorso", "LowerTorso", "LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand",
+                    "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot")
+            else listOf("Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg")
+            for (n in bodyNames) ch.add(CharInst("Part", n))
+            Anim.reset()
             for (c in Scene.service("StarterPlayer").children) {
                 if (c.className == "StarterCharacterScripts") for (k in c.children) ch.add(k.cloneTree())
             }
@@ -257,6 +264,8 @@ object Play {
         dead = false
         frags.clear()
         tapOn = false
+        airTime = 0f
+        Anim.reset()
     }
 
     // "Reiniciar personagem" do menu: no Roblox o personagem também se despedaça
@@ -313,9 +322,11 @@ object Play {
         val sf = sin(fr).toFloat()
         // Roblox: as juntas se quebram e cada peça vira um objeto físico que continua com a
         // velocidade do personagem e desaba pela gravidade (sem explosão)
-        for (i in 0..5) {
-            val o = PART_OFF[i]
-            val h = PART_HALF[i]
+        val rig = Rig.current()
+        for (i in rig.parts.indices) {
+            val rp = rig.parts[i]
+            val o = floatArrayOf(rp.cx, rp.cy, rp.cz)
+            val h = floatArrayOf(rp.hx, rp.hy, rp.hz)
             val wx = x + o[0] * cf + o[2] * sf
             val wz = z - o[0] * sf + o[2] * cf
             val f = Frag(wx, y + o[1], wz,
@@ -422,6 +433,7 @@ object Play {
                 touches()
             }
             if (toolSwing > 0f) toolSwing = maxOf(0f, toolSwing - dt / 0.25f)
+            if (!dead) Anim.update(dt)
             for (p in Scene.parts) if (p.y < -500f) Scene.destroy(p)
             if (!dead && health <= 0f) die()
         }
@@ -539,6 +551,8 @@ object Play {
         move(boxes, 2, mz * spd * dt)
         grounded = false
         move(boxes, 1, vy * dt)
+        onGround = grounded
+        if (grounded) airTime = 0f else airTime += dt
         if (y < -300f) respawn()
 
         Cam.target[0] = x

@@ -15,6 +15,9 @@ object Settings {
     @Volatile var moveMode = MOVE_JOYSTICK
     @Volatile var firstPerson = false
 
+    // tipo de corpo do personagem: R6 (6 blocos) ou R15 (15 peças com cotovelo e joelho)
+    @Volatile var rigR15 = false
+
     // qualidade gráfica (igual ao Roblox): automático ou manual de 1 a 10
     @Volatile var qualityAuto = true
     @Volatile var quality = 7
@@ -30,6 +33,7 @@ object Settings {
         camMode = p.getInt("camMode", CAM_CLASSIC)
         moveMode = p.getInt("moveMode", MOVE_JOYSTICK)
         firstPerson = p.getBoolean("firstPerson", false)
+        rigR15 = p.getBoolean("rigR15", false)
         qualityAuto = p.getBoolean("qualityAuto", true)
         quality = p.getInt("quality", 7).coerceIn(1, 10)
     }
@@ -40,6 +44,7 @@ object Settings {
             .putInt("camMode", camMode)
             .putInt("moveMode", moveMode)
             .putBoolean("firstPerson", firstPerson)
+            .putBoolean("rigR15", rigR15)
             .putBoolean("qualityAuto", qualityAuto)
             .putInt("quality", quality)
             .apply()
