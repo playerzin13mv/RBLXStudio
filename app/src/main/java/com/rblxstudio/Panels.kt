@@ -75,6 +75,7 @@ internal fun iconFor(i: Inst): Int = when {
     i is PartData -> R.drawable.ic_part
     i.className == "Script" || i.className == "LocalScript" || i.className == "StarterPlayerScripts" -> R.drawable.ic_script
     i.className == "StarterCharacterScripts" -> R.drawable.ic_player
+    i.className == "Tool" -> R.drawable.ic_toolbox
     i.className == "Folder" || i.className == "Model" -> R.drawable.ic_group
     i.className.endsWith("Value") -> R.drawable.ic_properties
     i.className == "Sound" -> R.drawable.ic_volume
@@ -225,7 +226,7 @@ internal fun MainActivity.numRow(label: String, get: () -> Float, set: (Float) -
 }
 
 // campo de texto simples ligado a uma propriedade (props) de qualquer objeto
-internal val imageKeys = setOf("Texture", "TextureID", "Image")
+internal val imageKeys = setOf("Texture", "TextureID", "Image", "TextureId")
 
 internal fun MainActivity.propRow(o: Inst, key: String) {
     val et = field(o.prop(key), false) { s ->

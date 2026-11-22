@@ -9,6 +9,12 @@ Versão do Roblox Studio para celular (Android), feita em Kotlin + OpenGL ES.
 - Ícones vetoriais no lugar dos emojis e ícone do app (logo do Roblox Studio)
 - **Login com conta do Roblox** (OAuth 2.0 + PKCE)
 
+## Novidades da v0.13
+- Tela inicial no estilo do Roblox Studio: "Oi, nome" com sua foto, abas Home, Recent, My Games e Group Games (lugares da sua conta com o ícone de cada um; sem ícone aparece o globo verde), Open File... e Open by Place ID, engrenagem de configurações.
+- Editor: joystick para voar com a câmera, botões de subir/descer, foco e velocidade x1/x2/x4. Editor de scripts novo em tela cheia, com abas, números de linha, cores de sintaxe, Check e fileira de símbolos.
+- Tool e inventário: nova classe Tool (com Handle) no StarterPack, barra de Tools e mochila no Play, eventos Equipped / Unequipped / Activated, Humanoid:EquipTool.
+- Gráficos: céu com gradiente, sol e nuvens, névoa, luz mais bonita, studs no Classic Baseplate, reflexo e sombra do personagem. Qualidade 1 a 10 ou Automática (menu do jogo > Settings e engrenagem da tela inicial).
+
 ## Novidades da v0.12
 - Menu do jogo no estilo antigo do Roblox: abas People, Settings, Report, Help e Record; botões Leave, Reset Character e Resume embaixo.
 - Ícone do botão de menu refeito (o PNG antigo era um quadrado branco).

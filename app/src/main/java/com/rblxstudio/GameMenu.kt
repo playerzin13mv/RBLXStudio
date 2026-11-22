@@ -330,6 +330,8 @@ class GameMenu(private val act: Activity) : FrameLayout(act) {
         choice(listOf("Third person", "First person"), if (Settings.firstPerson) 1 else 0) { Settings.firstPerson = it == 1 }
         label("Movement Mode")
         choice(listOf("Joystick", "D-Pad", "Tap to move"), Settings.moveMode) { Settings.moveMode = it }
+        label("Graphics")
+        content.addView(GraphicsUi.view(act) { Settings.save(act) }, LinearLayout.LayoutParams(-1, -2))
         note("Follow: a câmera gira atrás do personagem. Classic: você gira a câmera com o dedo. " +
             "Pinça com dois dedos para zoom: bem perto vira primeira pessoa.")
     }
@@ -367,6 +369,7 @@ class GameMenu(private val act: Activity) : FrameLayout(act) {
         helpRow("Camera", "Arraste o dedo no lado direito; pinça para zoom")
         helpRow("Shift Lock", "Botão do cadeado, ao lado do pulo")
         helpRow("Chat", "Botão do balão no canto superior esquerdo")
+        helpRow("Tools", "Barra embaixo: toque para pegar; toque na tela para usar. A mochila mostra todas")
     }
 
     private fun helpRow(a: String, b: String) {

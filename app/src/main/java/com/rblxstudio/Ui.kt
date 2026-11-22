@@ -23,6 +23,8 @@ internal fun classIcon(cls: String): Pair<Int, Int> = when (cls) {
     "LocalScript" -> Pair(R.drawable.ic_script, 0xFF26C6A0.toInt())
     "Sound" -> Pair(R.drawable.ic_volume, 0xFFAB47BC.toInt())
     "ScreenGui", "Frame", "TextLabel", "TextButton", "ImageLabel", "PlayerGui" -> Pair(R.drawable.ic_ui, 0xFF66BB6A.toInt())
+    "Tool" -> Pair(R.drawable.ic_toolbox, 0xFFFF8A65.toInt())
+    "Backpack" -> Pair(R.drawable.ic_box, 0xFFFFB74D.toInt())
     "Folder", "Model" -> Pair(R.drawable.ic_group, 0xFFFFCA28.toInt())
     "StringValue", "NumberValue", "BoolValue" -> Pair(R.drawable.ic_properties, 0xFFFF8A65.toInt())
     "MeshPart" -> Pair(R.drawable.ic_part, 0xFFFF7043.toInt())

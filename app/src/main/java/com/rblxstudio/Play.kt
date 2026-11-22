@@ -49,6 +49,12 @@ object Play {
     }
     val frags = ArrayList<Frag>()
 
+    // Tool equipada na mão e animação de golpe (1 -> 0)
+    @Volatile var equipped: Inst? = null
+    @Volatile var toolSwing = 0f
+    var onTools: (() -> Unit)? = null
+    private val toolOrder = ArrayList<Inst>()
+
     @Volatile var health = 100f
     @Volatile var walkSpeed = 16f
     @Volatile var jumpPower = 50f
@@ -104,6 +110,12 @@ object Play {
             val gui = Inst("PlayerGui", "PlayerGui")
             for (c in Scene.service("StarterGui").children) gui.add(c.cloneTree())
             pl.add(gui)
+            val bp = Inst("Backpack", "Backpack")
+            for (c in Scene.service("StarterPack").children) bp.add(c.cloneTree())
+            pl.add(bp)
+            equipped = null
+            toolSwing = 0f
+            toolOrder.clear()
             Scene.players.add(pl)
             Scene.localPlayer = pl
             Scene.character = ch
@@ -130,6 +142,7 @@ object Play {
             active = true
             Lua.start()
         }
+        onTools?.invoke()
     }
 
     fun stop() {
@@ -145,6 +158,9 @@ object Play {
             Scene.localPlayer = null
             Scene.character = null
             Scene.playerGui = null
+            equipped = null
+            toolSwing = 0f
+            toolOrder.clear()
             Scene.selected = null
             Scene.selObj = null
             moveX = 0f; moveY = 0f; jump = false
@@ -154,6 +170,54 @@ object Play {
             shiftLock = false
             Cam.shoulder = 0f
         }
+    }
+
+    // ---------- Tools e inventário ----------
+    fun backpack(): Inst? = Scene.localPlayer?.children?.firstOrNull { it.className == "Backpack" }
+
+    // todas as tools do jogador (mochila + a que está na mão), na ordem em que apareceram
+    fun tools(): List<Inst> {
+        val have = ArrayList<Inst>()
+        val bp = backpack()
+        if (bp != null) {
+            for (c in bp.children) if (c.className == "Tool") have.add(c)
+        }
+        val eq = equipped
+        if (eq != null && !have.contains(eq)) have.add(eq)
+        toolOrder.removeAll { !have.contains(it) }
+        for (t in have) if (!toolOrder.contains(t)) toolOrder.add(t)
+        return ArrayList(toolOrder)
+    }
+
+    private fun unequipLocked() {
+        val t = equipped ?: return
+        equipped = null
+        val bp = backpack()
+        if (bp != null) Scene.setParent(t, bp)
+        Lua.equipped(t, false)
+    }
+
+    fun equip(tool: Inst) {
+        synchronized(lock) {
+            if (!active || dead) return
+            if (tool.className != "Tool" || equipped === tool) return
+            unequipLocked()
+            val ch = Scene.character ?: return
+            Scene.setParent(tool, ch)
+            equipped = tool
+            toolSwing = 0f
+            Lua.equipped(tool, true)
+        }
+        onTools?.invoke()
+    }
+
+    fun unequip() {
+        synchronized(lock) { unequipLocked() }
+        onTools?.invoke()
+    }
+
+    fun toggleTool(tool: Inst) {
+        if (equipped === tool) unequip() else equip(tool)
     }
 
     private fun computeSpawn(here: Boolean) {
@@ -233,6 +297,7 @@ object Play {
     private fun die() {
         if (dead) return
         dead = true
+        unequipLocked()
         if (Cam.dist < 1f) Cam.dist = 10f
         deadT = 0f
         health = 0f
@@ -356,6 +421,7 @@ object Play {
                 stepPlayer(dt)
                 touches()
             }
+            if (toolSwing > 0f) toolSwing = maxOf(0f, toolSwing - dt / 0.25f)
             for (p in Scene.parts) if (p.y < -500f) Scene.destroy(p)
             if (!dead && health <= 0f) die()
         }

@@ -36,6 +36,22 @@ class Renderer : GLSurfaceView.Renderer {
     private var uTile = 0
     private var uFace = 0
     private var aT = 0
+    private var uEye = 0
+    private var uFog = 0
+    private var uSpec = 0
+    private var uStud = 0
+    // céu
+    private var skyProg = 0
+    private var skyA = 0
+    private var skyUF = 0
+    private var skyUR = 0
+    private var skyUU = 0
+    private var skyUTh = 0
+    private var skyUAsp = 0
+    private var skyUTime = 0
+    private var skyUQ = 0
+    private var skyUOct = 0
+    private lateinit var skyBuf: FloatBuffer
     private var curTex = 0
     private val texIds = HashMap<String, Int>()
     private val texAsked = HashSet<String>()
@@ -138,17 +154,20 @@ class Renderer : GLSurfaceView.Renderer {
         GLES20.glClearColor(0.62f, 0.69f, 0.80f, 1f)
         buildMeshes()
         val vs = "uniform mat4 uVP; uniform mat4 uModel; attribute vec3 aP; attribute vec3 aN; attribute vec2 aT;\n" +
-            "varying float vL; varying vec3 vW; varying vec3 vO; varying vec3 vN; varying vec2 vT;\n" +
+            "varying vec3 vL; varying vec3 vW; varying vec3 vO; varying vec3 vN; varying vec2 vT; varying vec3 vWN;\n" +
             "void main(){ vec4 w = uModel * vec4(aP, 1.0); vW = w.xyz; vO = aP; vN = aN; vT = aT;\n" +
-            "vec3 n = normalize((uModel * vec4(aN, 0.0)).xyz);\n" +
-            "vL = 0.45 + 0.55 * max(dot(n, normalize(vec3(0.4, 1.0, 0.6))), 0.0);\n" +
+            "vec3 n = normalize((uModel * vec4(aN, 0.0)).xyz); vWN = n;\n" +
+            "float dif = max(dot(n, normalize(vec3(0.45, 0.85, 0.35))), 0.0);\n" +
+            "vec3 amb = mix(vec3(0.30, 0.31, 0.34), vec3(0.46, 0.52, 0.64), n.y * 0.5 + 0.5);\n" +
+            "vL = (amb + vec3(1.0, 0.93, 0.80) * dif * 0.66) * 0.95;\n" +
             "gl_Position = uVP * w; }"
         val fs = "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
-            "uniform vec3 uColor; uniform float uLight; uniform float uGrid;\n" +
+            "uniform vec3 uColor; uniform float uLight; uniform float uGrid; uniform vec3 uEye; uniform float uFog; uniform float uSpec; uniform float uStud;\n" +
             "uniform sampler2D uTex; uniform float uUseTex; uniform vec3 uHalf; uniform float uTile; uniform vec4 uFace[6];\n" +
-            "varying float vL; varying vec3 vW; varying vec3 vO; varying vec3 vN; varying vec2 vT;\n" +
+            "varying vec3 vL; varying vec3 vW; varying vec3 vO; varying vec3 vN; varying vec2 vT; varying vec3 vWN;\n" +
             "void main(){ vec3 c = uColor;\n" +
-            "if (uUseTex > 2.5) { vec4 mt = texture2D(uTex, vT); gl_FragColor = vec4(mt.rgb * mix(1.0, vL, uLight), 1.0); return; }\n" +
+            "if (uUseTex > 3.5) { float dd = length(vO.xz); float al = (1.0 - smoothstep(0.25, 1.0, dd)) * uColor.r; gl_FragColor = vec4(0.0, 0.0, 0.0, al); return; }\n" +
+            "if (uUseTex > 2.5) { vec4 mt = texture2D(uTex, vT); gl_FragColor = vec4(mt.rgb * mix(vec3(1.0), vL, uLight), 1.0); return; }\n" +
             "if (uUseTex > 1.5) {\n" +
             "  vec3 an2 = abs(vN); vec2 uv2; vec4 r;\n" +
             "  if (an2.x > 0.5) { uv2 = vec2(-vO.z * sign(vN.x), vO.y); if (vN.x > 0.0) r = uFace[0]; else r = uFace[1]; }\n" +
@@ -158,7 +177,7 @@ class Renderer : GLSurfaceView.Renderer {
             "  vec2 t2 = uv2 * 0.5 + 0.5; t2.y = 1.0 - t2.y;\n" +
             "  vec4 tc2 = texture2D(uTex, r.xy + t2 * r.zw);\n" +
             "  if (tc2.a < 0.05) discard;\n" +
-            "  gl_FragColor = vec4(tc2.rgb * mix(1.0, vL, uLight), tc2.a); return;\n" +
+            "  gl_FragColor = vec4(tc2.rgb * mix(vec3(1.0), vL, uLight), tc2.a); return;\n" +
             "}\n" +
             "if (uGrid > 0.5) { float k = mod(floor(vW.x / 16.0) + floor(vW.z / 16.0), 2.0); c = c * (0.85 + 0.15 * k); }\n" +
             "if (uUseTex > 0.5) {\n" +
@@ -172,7 +191,22 @@ class Renderer : GLSurfaceView.Renderer {
             "  vec4 tc = texture2D(uTex, t);\n" +
             "  c = mix(c, tc.rgb, tc.a);\n" +
             "}\n" +
-            "gl_FragColor = vec4(c * mix(1.0, vL, uLight), 1.0); }"
+            "float fdist = distance(vW, uEye);\n" +
+            "if (uStud > 0.5 && vWN.y > 0.9) {\n" +
+            "  vec2 sf = fract(vW.xz) - 0.5; float sr = length(sf);\n" +
+            "  float sk = 1.0 - smoothstep(25.0, 80.0, fdist);\n" +
+            "  float top = 1.0 - smoothstep(0.30, 0.36, sr);\n" +
+            "  float rim = smoothstep(0.30, 0.36, sr) * (1.0 - smoothstep(0.36, 0.44, sr));\n" +
+            "  c = c * (1.0 + sk * (0.10 * top - 0.14 * rim));\n" +
+            "}\n" +
+            "vec3 outc = c * mix(vec3(1.0), vL, uLight);\n" +
+            "if (uSpec > 0.5 && uLight > 0.5) {\n" +
+            "  vec3 V = normalize(uEye - vW); vec3 H = normalize(normalize(vec3(0.45, 0.85, 0.35)) + V);\n" +
+            "  outc += vec3(1.0, 0.97, 0.9) * pow(max(dot(normalize(vWN), H), 0.0), 48.0) * 0.10;\n" +
+            "}\n" +
+            "float ff = smoothstep(260.0, 1100.0, fdist) * uFog;\n" +
+            "outc = mix(outc, vec3(0.74, 0.86, 0.97), ff);\n" +
+            "gl_FragColor = vec4(outc, 1.0); }"
         prog = GLES20.glCreateProgram()
         GLES20.glAttachShader(prog, shader(GLES20.GL_VERTEX_SHADER, vs))
         GLES20.glAttachShader(prog, shader(GLES20.GL_FRAGMENT_SHADER, fs))
@@ -190,13 +224,145 @@ class Renderer : GLSurfaceView.Renderer {
         uUseTex = GLES20.glGetUniformLocation(prog, "uUseTex")
         uHalf = GLES20.glGetUniformLocation(prog, "uHalf")
         uTile = GLES20.glGetUniformLocation(prog, "uTile")
+        uEye = GLES20.glGetUniformLocation(prog, "uEye")
+        uFog = GLES20.glGetUniformLocation(prog, "uFog")
+        uSpec = GLES20.glGetUniformLocation(prog, "uSpec")
+        uStud = GLES20.glGetUniformLocation(prog, "uStud")
         GLES20.glUseProgram(prog)
         GLES20.glUniform1i(uTex, 0)
+        buildSky()
         texIds.clear()
         texAsked.clear()
         avVer = -1
         shirtTex = 0; pantsTex = 0; tshirtTex = 0; faceTex = 0
         accGl.clear()
+    }
+
+    // ---------- céu: gradiente, sol e nuvens (calculado por pixel, sem imagens) ----------
+    private fun buildSky() {
+        val vs = "attribute vec2 aPos; varying vec2 vP;\n" +
+            "void main(){ vP = aPos; gl_Position = vec4(aPos, 0.0, 1.0); }"
+        val fs = "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
+            "uniform vec3 uF; uniform vec3 uR; uniform vec3 uU; uniform float uTh; uniform float uAsp;\n" +
+            "uniform float uTime; uniform float uQ; uniform float uOct;\n" +
+            "varying vec2 vP;\n" +
+            "float hsh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\n" +
+            "float nz(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);\n" +
+            "  return mix(mix(hsh(i), hsh(i + vec2(1.0, 0.0)), f.x), mix(hsh(i + vec2(0.0, 1.0)), hsh(i + vec2(1.0, 1.0)), f.x), f.y); }\n" +
+            "void main(){\n" +
+            "  vec3 d = normalize(uF + uR * (vP.x * uTh * uAsp) + uU * (vP.y * uTh));\n" +
+            "  vec3 hor = vec3(0.74, 0.86, 0.97); vec3 zen = vec3(0.14, 0.40, 0.84);\n" +
+            "  vec3 col = mix(hor, zen, pow(clamp(d.y, 0.0, 1.0), 0.5));\n" +
+            "  if (d.y < 0.0) col = mix(hor, vec3(0.60, 0.70, 0.84), clamp(-d.y * 3.0, 0.0, 1.0));\n" +
+            "  vec3 sd = normalize(vec3(0.45, 0.85, 0.35));\n" +
+            "  float s = max(dot(d, sd), 0.0);\n" +
+            "  if (uQ > 1.5) {\n" +
+            "    col += vec3(1.0, 0.82, 0.55) * pow(s, 6.0) * 0.22;\n" +
+            "    col += vec3(1.0, 0.92, 0.75) * pow(s, 64.0) * 0.35;\n" +
+            "    col = mix(col, vec3(1.0, 0.98, 0.90), smoothstep(0.9992, 0.9997, s));\n" +
+            "  }\n" +
+            "  if (uQ > 2.5 && d.y > 0.01) {\n" +
+            "    vec2 p = d.xz / (d.y + 0.18) * 1.5 + vec2(uTime * 0.02, uTime * 0.008);\n" +
+            "    float c = 0.0; float a = 0.55; vec2 q = p;\n" +
+            "    for (int i = 0; i < 4; i++) { if (float(i) >= uOct) break; c += nz(q) * a; q = q * 2.03 + vec2(1.7, 9.2); a *= 0.5; }\n" +
+            "    c = smoothstep(0.45, 0.85, c);\n" +
+            "    float fade = smoothstep(0.01, 0.22, d.y);\n" +
+            "    vec3 cc = mix(vec3(0.80, 0.84, 0.92), vec3(1.0), c);\n" +
+            "    col = mix(col, cc, c * fade * 0.92);\n" +
+            "  }\n" +
+            "  gl_FragColor = vec4(col, 1.0);\n" +
+            "}"
+        skyProg = GLES20.glCreateProgram()
+        GLES20.glAttachShader(skyProg, shader(GLES20.GL_VERTEX_SHADER, vs))
+        GLES20.glAttachShader(skyProg, shader(GLES20.GL_FRAGMENT_SHADER, fs))
+        GLES20.glLinkProgram(skyProg)
+        skyA = GLES20.glGetAttribLocation(skyProg, "aPos")
+        skyUF = GLES20.glGetUniformLocation(skyProg, "uF")
+        skyUR = GLES20.glGetUniformLocation(skyProg, "uR")
+        skyUU = GLES20.glGetUniformLocation(skyProg, "uU")
+        skyUTh = GLES20.glGetUniformLocation(skyProg, "uTh")
+        skyUAsp = GLES20.glGetUniformLocation(skyProg, "uAsp")
+        skyUTime = GLES20.glGetUniformLocation(skyProg, "uTime")
+        skyUQ = GLES20.glGetUniformLocation(skyProg, "uQ")
+        skyUOct = GLES20.glGetUniformLocation(skyProg, "uOct")
+        val q = floatArrayOf(-1f, -1f, 1f, -1f, 1f, 1f, -1f, -1f, 1f, 1f, -1f, 1f)
+        val b = ByteBuffer.allocateDirect(q.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        b.put(q)
+        b.position(0)
+        skyBuf = b
+    }
+
+    private fun drawSky() {
+        if (skyProg == 0) return
+        val b = Cam.basis()
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+        GLES20.glUseProgram(skyProg)
+        GLES20.glUniform3f(skyUF, b[0][0], b[0][1], b[0][2])
+        GLES20.glUniform3f(skyUR, b[1][0], b[1][1], b[1][2])
+        GLES20.glUniform3f(skyUU, b[2][0], b[2][1], b[2][2])
+        GLES20.glUniform1f(skyUTh, Math.tan(Math.toRadians((Cam.FOV / 2f).toDouble())).toFloat())
+        GLES20.glUniform1f(skyUAsp, Cam.w.toFloat() / Cam.h.toFloat())
+        GLES20.glUniform1f(skyUTime, ((System.nanoTime() / 1000000L) % 600000L).toFloat() / 1000f)
+        val ql = Settings.level()
+        GLES20.glUniform1f(skyUQ, ql.toFloat())
+        GLES20.glUniform1f(skyUOct, if (ql >= 9) 4f else if (ql >= 6) 3f else 2f)
+        skyBuf.position(0)
+        GLES20.glVertexAttribPointer(skyA, 2, GLES20.GL_FLOAT, false, 8, skyBuf)
+        GLES20.glEnableVertexAttribArray(skyA)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+        GLES20.glDisableVertexAttribArray(skyA)
+        GLES20.glUseProgram(prog)
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+    }
+
+    // sombra redonda embaixo do personagem
+    private fun drawBlob() {
+        val feet = Play.y - Play.HY
+        var top = -1e9f
+        for (p in Scene.parts) {
+            if (!p.canCollide) continue
+            if (abs(Play.x - p.x) > p.halfExtent(0) || abs(Play.z - p.z) > p.halfExtent(2)) continue
+            val t = p.y + p.halfExtent(1)
+            if (t <= feet + 0.6f && t > top) top = t
+        }
+        if (top < -1e8f) return
+        val a = (0.55f * (1f - (feet - top) / 40f)).coerceIn(0f, 0.55f)
+        if (a <= 0.01f) return
+        use(cube)
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, Play.x, top + 0.04f, Play.z)
+        Matrix.scaleM(model, 0, 2.3f, 0.02f, 2.3f)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        GLES20.glDepthMask(false)
+        GLES20.glUniformMatrix4fv(uModel, 1, false, model, 0)
+        GLES20.glUniform3f(uColor, a, 0f, 0f)
+        GLES20.glUniform1f(uLight, 0f)
+        GLES20.glUniform1f(uGrid, 0f)
+        GLES20.glUniform1f(uUseTex, 4f)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 36)
+        GLES20.glDepthMask(true)
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glUniform1f(uUseTex, 0f)
+    }
+
+    // Tool na mão direita (o Handle vira uma caixa presa ao braço)
+    private fun drawTool(tool: Inst) {
+        var handle: PartData? = null
+        for (c in tool.children) {
+            if (c is PartData && c.name == "Handle") {
+                handle = c
+                break
+            }
+        }
+        val h = handle ?: return
+        if (!partMatrix(2, pm)) return
+        Matrix.translateM(pm, 0, 0f, -1.0f, 0f)
+        Matrix.rotateM(pm, 0, 90f, 1f, 0f, 0f)
+        Matrix.scaleM(pm, 0, h.sx / 2f, h.sy / 2f, h.sz / 2f)
+        use(cube)
+        curTex = 0
+        draw(pm, h.r, h.g, h.b, 1f, 0f, GLES20.GL_TRIANGLES, 36)
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
@@ -344,7 +510,10 @@ class Renderer : GLSurfaceView.Renderer {
         var ang = 0f
         var pivot = o[1]
         when (i) {
-            2 -> { ang = swing; pivot = 1.5f }
+            2 -> {
+                ang = if (Play.equipped != null) -90f + 70f * sin(PI.toFloat() * (1f - Play.toolSwing)) else swing
+                pivot = 1.5f
+            }
             3 -> { ang = -swing; pivot = 1.5f }
             4 -> { ang = -swing; pivot = -0.5f }
             5 -> { ang = swing; pivot = -0.5f }
@@ -544,6 +713,8 @@ class Renderer : GLSurfaceView.Renderer {
         for (g in accGl) drawAccessory(g)
         GLES20.glUniform1f(uUseTex, 0f)
         use(cube)
+        val eq = Play.equipped
+        if (eq != null && !Play.dead) drawTool(eq)
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -565,6 +736,7 @@ class Renderer : GLSurfaceView.Renderer {
         }
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+        drawSky()
         val e = Cam.eye()
         var tx = Cam.target[0]
         var ty = Cam.target[1]
@@ -580,9 +752,14 @@ class Renderer : GLSurfaceView.Renderer {
         synchronized(snap) { System.arraycopy(vp, 0, snap, 0, 16) }
         GLES20.glUseProgram(prog)
         GLES20.glUniformMatrix4fv(uVP, 1, false, vp, 0)
+        val ql = Settings.level()
+        GLES20.glUniform3f(uEye, e[0], e[1], e[2])
+        GLES20.glUniform1f(uFog, if (ql >= 5) 1f else 0f)
+        GLES20.glUniform1f(uSpec, if (ql >= 7) 1f else 0f)
 
         use(cube)
         for (p in Scene.parts) {
+            GLES20.glUniform1f(uStud, if (ql >= 5 && p.props["Studs"] == "true") 1f else 0f)
             val ts = p.props["Texture"] ?: p.props["TextureID"]
             var tid = 0
             if (!ts.isNullOrEmpty()) tid = texFor(ts)
@@ -597,9 +774,13 @@ class Renderer : GLSurfaceView.Renderer {
             draw(model, p.r, p.g, p.b, 1f, if (p.grid) 1f else 0f, GLES20.GL_TRIANGLES, 36)
         }
         curTex = 0
+        GLES20.glUniform1f(uStud, 0f)
 
         if (Play.active) {
-            if (!Play.firstPerson()) drawAvatar()
+            if (!Play.firstPerson()) {
+                if (!Play.dead && ql >= 3) drawBlob()
+                drawAvatar()
+            }
             return
         }
 

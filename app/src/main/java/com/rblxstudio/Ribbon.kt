@@ -113,7 +113,7 @@ internal fun MainActivity.buildRibbon(tab: String) {
                 snap)
             group("Terrain", rbtn(R.drawable.ic_terrain, "Editor") { soon() })
             group("Insert",
-                rbtn(R.drawable.ic_toolbox, "Toolbox") { soon() },
+                rbtn(R.drawable.ic_toolbox, "Toolbox") { toolboxMenu() },
                 rbtn(R.drawable.ic_part, "Part", null) { Editor.addPart() },
                 rbtn(R.drawable.ic_script, "Object") { insertMenu(Defaults.classes) },
                 rbtn(R.drawable.ic_ui, "UI") { insertMenu(listOf("ScreenGui", "Frame", "TextLabel", "TextButton", "ImageLabel")) },
@@ -126,7 +126,7 @@ internal fun MainActivity.buildRibbon(tab: String) {
                 rbtn(R.drawable.ic_anchor, "Anchor") { Editor.toggleAnchor() },
                 rbtn(R.drawable.ic_delete, "Delete") { deleteSel() })
             group("Test", play(), playHere(), stop())
-            group("Settings", rbtn(R.drawable.ic_settings, "Game Settings") { soon() })
+            group("Settings", rbtn(R.drawable.ic_settings, "Game Settings") { openSettings() })
         }
         "TEST" -> group("Test", play(), playHere(), stop())
         "VIEW" -> group("Show",
@@ -144,4 +144,16 @@ internal fun MainActivity.buildRibbon(tab: String) {
         }
     }
     refreshTools()
+}
+
+// Toolbox: peças e objetos prontos (Tool, Script, UI...)
+internal fun MainActivity.toolboxMenu() {
+    val names = ArrayList<String>()
+    names.add("Part")
+    names.addAll(Defaults.classes)
+    StyledDialog(this).setTitle("Toolbox")
+        .setIcons(names.map { if (it == "Part") Pair(R.drawable.ic_part, 0xFFB0BEC5.toInt()) else classIcon(it) })
+        .setItems(names.toTypedArray()) { _, i ->
+            if (names[i] == "Part") Editor.addPart() else insertObject(names[i])
+        }.show()
 }

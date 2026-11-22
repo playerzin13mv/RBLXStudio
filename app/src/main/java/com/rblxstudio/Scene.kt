@@ -138,9 +138,9 @@ class PartData(
 
 // classes que dá para inserir e as propriedades editáveis de cada uma
 object Defaults {
-    val classes = listOf("Script", "LocalScript", "Sound", "ScreenGui", "Frame", "TextLabel", "TextButton", "ImageLabel", "Folder", "Model", "StringValue", "NumberValue", "BoolValue")
+    val classes = listOf("Tool", "Script", "LocalScript", "Sound", "ScreenGui", "Frame", "TextLabel", "TextButton", "ImageLabel", "Folder", "Model", "StringValue", "NumberValue", "BoolValue")
     private val guiClasses = setOf("ScreenGui", "Frame", "TextLabel", "TextButton", "ImageLabel")
-    val boolKeys = setOf("Visible", "Enabled", "Looped", "Playing")
+    val boolKeys = setOf("Visible", "Enabled", "Looped", "Playing", "CanBeDropped", "RequiresHandle")
     private val base = listOf("Position", "Size", "AnchorPoint", "BackgroundColor3", "BackgroundTransparency", "Visible")
 
     fun isGui(c: String) = c in guiClasses
@@ -153,6 +153,7 @@ object Defaults {
         "TextLabel", "TextButton" -> base + listOf("Text", "TextColor3", "TextSize")
         "ImageLabel" -> base + listOf("Image")
         "MeshPart" -> listOf("MeshId", "TextureID")
+        "Tool" -> listOf("ToolTip", "TextureId", "CanBeDropped", "RequiresHandle")
         "StringValue", "NumberValue", "BoolValue" -> listOf("Value")
         else -> emptyList()
     }
@@ -168,6 +169,14 @@ object Defaults {
                 i.props["Playing"] = "false"
             }
             "ScreenGui" -> i.props["Enabled"] = "true"
+            "Tool" -> {
+                i.props["ToolTip"] = ""
+                i.props["TextureId"] = ""
+                i.props["CanBeDropped"] = "true"
+                i.props["RequiresHandle"] = "true"
+                val h = PartData("Handle", 0f, 0f, 0f, 1f, 1f, 3f, 0.64f, 0.635f, 0.647f, false)
+                i.add(h)
+            }
             "StringValue" -> i.props["Value"] = ""
             "NumberValue" -> i.props["Value"] = "0"
             "BoolValue" -> i.props["Value"] = "false"
@@ -250,7 +259,9 @@ object Scene {
                 parts.add(bp)
             }
             "Classic Baseplate" -> {
-                parts.add(PartData("Baseplate", 0f, -10f, 0f, 512f, 20f, 512f, 0.639f, 0.635f, 0.647f, true))
+                val cb = PartData("Baseplate", 0f, -10f, 0f, 512f, 20f, 512f, 0.639f, 0.635f, 0.647f, true)
+                cb.props["Studs"] = "true"
+                parts.add(cb)
             }
             else -> {}
         }

@@ -11,6 +11,29 @@ object Storage {
 
     private fun clean(name: String) = name.trim().replace(Regex("[^A-Za-z0-9 _.\\-]"), "_").ifEmpty { "Place" }
 
+    // lugares abertos pela conta do Roblox guardam o Place ID e o Universe ID (para mostrar o ícone)
+    private fun meta(ctx: Context) = ctx.getSharedPreferences("place_meta", Context.MODE_PRIVATE)
+
+    fun setCloud(ctx: Context, name: String, placeId: Long, universeId: Long) {
+        meta(ctx).edit().putString(clean(name), placeId.toString() + "|" + universeId.toString()).apply()
+    }
+
+    // devolve {placeId, universeId} ou null se for um lugar só do aparelho
+    fun cloud(ctx: Context, name: String): LongArray? {
+        val v = meta(ctx).getString(name, null) ?: return null
+        val t = v.split("|")
+        if (t.size != 2) return null
+        val a = t[0].toLongOrNull() ?: return null
+        val b = t[1].toLongOrNull() ?: return null
+        return longArrayOf(a, b)
+    }
+
+    fun modified(ctx: Context, name: String): Long = File(dir(ctx), "$name.json").lastModified()
+
+    fun exists(ctx: Context, name: String): Boolean = File(dir(ctx), clean(name) + ".json").exists()
+
+    fun cleanName(name: String): String = clean(name)
+
     fun list(ctx: Context): List<String> =
         (dir(ctx).listFiles() ?: emptyArray())
             .filter { it.name.endsWith(".json") }

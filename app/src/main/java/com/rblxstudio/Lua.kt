@@ -55,7 +55,8 @@ object Lua {
 
     private val signals = setOf(
         "Touched", "MouseButton1Click", "Activated", "Heartbeat", "RenderStepped", "Stepped",
-        "PlayerAdded", "Chatted", "Died", "CharacterAdded", "InputBegan", "InputEnded", "TouchTap"
+        "PlayerAdded", "Chatted", "Died", "CharacterAdded", "InputBegan", "InputEnded", "TouchTap",
+        "Equipped", "Unequipped", "Deactivated"
     )
     private val strKeys = setOf("Text", "Image", "SoundId", "MeshId", "TextureID", "Source", "PlaceholderText")
 
@@ -351,6 +352,22 @@ end
         fire(p, "Chatted", sv(msg))
     }
 
+    // clique na tela com uma Tool na mão
+    fun activated(tool: Inst) {
+        if (!live) return
+        Play.toolSwing = 1f
+        post { fire(tool, "Activated") }
+    }
+
+    // Tool pegou / largou: Equipped recebe o Mouse, como no Roblox
+    fun equipped(tool: Inst, on: Boolean) {
+        if (!live) return
+        post {
+            val gl = g
+            if (on && gl != null) fire(tool, "Equipped", gl.get("Mouse")) else fire(tool, if (on) "Equipped" else "Unequipped")
+        }
+    }
+
     fun died() {
         val h = Scene.character?.children?.firstOrNull { it.className == "Humanoid" } ?: return
         fire(h, "Died")
@@ -475,6 +492,12 @@ end
         }
         if (i.className == "Humanoid") {
             when (k) {
+                "EquipTool" -> return fn { a ->
+                    val t = asInst(a.arg(2))
+                    if (t != null) Play.equip(t)
+                    LuaValue.NONE
+                }
+                "UnequipTools" -> return fn { Play.unequip(); LuaValue.NONE }
                 "Health" -> return nv(Play.health)
                 "MaxHealth" -> return nv(100f)
                 "WalkSpeed" -> return nv(Play.walkSpeed)
@@ -668,7 +691,7 @@ end
         scriptsIn(Scene.workspace, all)
         scriptsIn(Scene.service("ServerScriptService"), all)
         scriptsIn(Scene.service("StarterPlayer"), all)
-        Scene.playerGui?.let { scriptsIn(it, all) }
+        Scene.localPlayer?.let { scriptsIn(it, all) }
         for (s in all) runScript(gl, s)
         pendingJoin = true
         Out.add("Play iniciado (" + all.size + " script(s))")

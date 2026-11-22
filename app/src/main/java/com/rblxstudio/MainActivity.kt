@@ -124,6 +124,9 @@ class MainActivity : Activity() {
     private lateinit var gui: GameGui
     private lateinit var gameMenu: GameMenu
     private lateinit var stopFab: ImageView
+    private lateinit var scriptEditor: ScriptEditor
+    private lateinit var editorPad: EditorPad
+    private lateinit var toolBar: ToolBar
     private lateinit var accountIcon: ImageView
     private lateinit var accountLabel: TextView
     internal val toolButtons = HashMap<Tool, View>()
@@ -220,6 +223,8 @@ class MainActivity : Activity() {
 
         val glFrame = FrameLayout(this)
         glFrame.addView(gl, FrameLayout.LayoutParams(MATCH, MATCH))
+        editorPad = EditorPad(this)
+        glFrame.addView(editorPad, FrameLayout.LayoutParams(MATCH, MATCH))
         hud = PlayHud(this)
         hud.visibility = View.GONE
         glFrame.addView(hud, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -231,6 +236,10 @@ class MainActivity : Activity() {
         gui.onMenu = { gameMenu.show() }
         glFrame.addView(gui, FrameLayout.LayoutParams(MATCH, MATCH))
 
+        toolBar = ToolBar(this)
+        glFrame.addView(toolBar, FrameLayout.LayoutParams(MATCH, MATCH))
+        Play.onTools = { runOnUiThread { toolBar.refresh() } }
+
         gameMenu = GameMenu(this)
         gameMenu.onLeave = { stopPlay() }
         gameMenu.onReset = { Play.respawnNow() }
@@ -239,6 +248,8 @@ class MainActivity : Activity() {
 
         guiEditor = GuiEditor(this)
         glFrame.addView(guiEditor, FrameLayout.LayoutParams(MATCH, MATCH))
+        scriptEditor = ScriptEditor(this)
+        glFrame.addView(scriptEditor, FrameLayout.LayoutParams(MATCH, MATCH))
 
         outText = tv("", 10f, Color.WHITE)
         outText.typeface = Typeface.MONOSPACE
@@ -379,6 +390,9 @@ class MainActivity : Activity() {
         applyControls()
         hud.visibility = View.VISIBLE
         stopFab.visibility = View.VISIBLE
+        editorPad.visibility = View.GONE
+        scriptEditor.hide()
+        toolBar.start()
         gui.start()
         Editor.onChanged?.invoke(true)
         toast(
@@ -417,6 +431,8 @@ class MainActivity : Activity() {
         hud.jumpDown = false
         hud.visibility = View.GONE
         stopFab.visibility = View.GONE
+        toolBar.stop()
+        editorPad.visibility = View.VISIBLE
         lastSel = null
         Editor.onChanged?.invoke(true)
     }
@@ -569,6 +585,8 @@ class MainActivity : Activity() {
             val slop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
             if (pinchId == -1 && lookTravel < slop * 1.5f && t - lookDownT < 300L) {
                 if (Settings.moveMode == Settings.MOVE_TAP) tapMove(lookLX, lookLY)
+                val eqTool = Play.equipped
+                if (eqTool != null) Lua.activated(eqTool)
                 Lua.mouseTap(lookLX, lookLY)
             }
         }
@@ -705,6 +723,7 @@ class MainActivity : Activity() {
 
     // ---------- conta do Roblox ----------
     private fun refreshAccount() {
+        if (::menu.isInitialized) menu.refreshUser()
         if (RobloxAuth.loggedIn(this)) {
             accountLabel.text = RobloxAuth.displayName(this)
             val av = RobloxAuth.avatar
@@ -722,7 +741,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun accountMenu() {
+    internal fun accountMenu() {
         if (RobloxAuth.loggedIn(this)) {
             StyledDialog(this)
                 .setTitle(RobloxAuth.displayName(this))
@@ -743,7 +762,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun styledEdit(hint: String, init: String, secret: Boolean): EditText {
+    internal fun styledEdit(hint: String, init: String, secret: Boolean): EditText {
         val et = EditText(this)
         et.hint = hint
         et.setText(init)
@@ -929,6 +948,11 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 78 && resultCode == RESULT_OK) {
+            val u = data?.data
+            if (u != null) openFileUri(u)
+            return
+        }
         if (requestCode != 77 || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         val target = imgTarget ?: return
@@ -972,6 +996,8 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         if (Play.active) {
             if (gameMenu.visibility == View.VISIBLE) gameMenu.hide() else gameMenu.show()
+        } else if (scriptEditor.visibility == View.VISIBLE) {
+            scriptEditor.hide()
         } else if (menu.visibility == View.VISIBLE) menu.hide() else super.onBackPressed()
     }
 
@@ -1035,13 +1061,14 @@ class MainActivity : Activity() {
 
     // ---------- inserir objetos ----------
     private fun canHold(i: Inst) =
-        i is PartData || i.className == "Folder" || i.className == "Model" || i.className.startsWith("Starter") || i.parent === Scene.game
+        i is PartData || i.className == "Folder" || i.className == "Model" || i.className == "Tool" || i.className.startsWith("Starter") || i.parent === Scene.game
 
     internal fun insertObject(cls: String) {
         if (needStop()) return
         val sel = Scene.selObj
         val parent: Inst = when {
             cls == "ScreenGui" -> Scene.service("StarterGui")
+            cls == "Tool" -> Scene.service("StarterPack")
             Defaults.isGui(cls) -> {
                 if (sel != null && (sel.className == "ScreenGui" || sel.className == "Frame")) sel
                 else Scene.service("StarterGui").children.firstOrNull { it.className == "ScreenGui" }
@@ -1095,35 +1122,120 @@ class MainActivity : Activity() {
     }
 
     internal fun editScript(s: Inst) {
-        val et = EditText(this)
-        et.setText(s.prop("Source"))
-        et.textSize = 12f
-        et.typeface = Typeface.MONOSPACE
-        et.setTextColor(C_TEXT)
-        et.setBackgroundColor(C_FIELD)
-        et.gravity = Gravity.TOP or Gravity.START
-        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        et.setPadding(dp(8), dp(8), dp(8), dp(8))
-        et.minLines = 10
+        if (needStop()) return
+        scriptEditor.open(s)
+    }
+
+    // ---------- tela inicial: configurações, arquivo, Place ID, lugares do Roblox ----------
+    internal fun openSettings() {
         val box = LinearLayout(this)
-        box.setPadding(dp(8), dp(4), dp(8), 0)
-        box.addView(et, lp(MATCH, WRAP))
-        val sv = ScrollView(this)
-        sv.addView(box)
-        StyledDialog(this).setTitle(s.name)
-            .setView(sv)
-            .setPositiveButton("Salvar") { _, _ ->
-                val src = et.text.toString()
-                s.props["Source"] = src
-                val err = Lua.syntax(src)
-                if (err != null) {
-                    Out.add(err, 2)
-                    toast("Erro de sintaxe (veja o Output)")
-                } else {
-                    toast("Script salvo")
+        box.orientation = LinearLayout.VERTICAL
+        box.addView(GraphicsUi.view(this) { Settings.save(this) }, lp(MATCH, WRAP))
+        StyledDialog(this).setTitle("Settings")
+            .setView(box)
+            .setPositiveButton("OK") { _, _ -> Settings.save(this) }
+            .show()
+    }
+
+    internal fun pickFile() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.type = "*/*"
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(i, 78)
+        } catch (e: Exception) {
+            toast("Não achei o seletor de arquivos")
+        }
+    }
+
+    private fun openFileUri(u: Uri) {
+        if (needStop()) return
+        Thread {
+            var ok = false
+            var name = "Arquivo"
+            var text = ""
+            try {
+                contentResolver.query(u, null, null, null, null)?.use { c ->
+                    val ix = c.getColumnIndex("_display_name")
+                    if (ix >= 0 && c.moveToFirst()) name = c.getString(ix) ?: name
                 }
+                if (name.endsWith(".json", true)) {
+                    text = contentResolver.openInputStream(u)?.use { it.bufferedReader().readText() } ?: ""
+                    ok = text.isNotEmpty()
+                }
+            } catch (e: Exception) {
+                ok = false
+            }
+            runOnUiThread {
+                if (!ok) {
+                    toast("Só abro arquivos .json salvos por este app (.rbxl ainda não)")
+                } else {
+                    try {
+                        Storage.fromJson(org.json.JSONObject(text))
+                        History.clear()
+                        placeName = null
+                        lastSel = null
+                        Editor.select(null)
+                        menu.hide()
+                        toast("Aberto: " + name)
+                    } catch (e: Exception) {
+                        toast("Esse arquivo não é um lugar válido")
+                    }
+                }
+            }
+        }.start()
+    }
+
+    internal fun openByPlaceId() {
+        val et = styledEdit("Place ID (só números)", "", false)
+        et.inputType = InputType.TYPE_CLASS_NUMBER
+        val box = LinearLayout(this)
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(et, lp(MATCH, WRAP))
+        StyledDialog(this).setTitle("Open by Place ID")
+            .setView(box)
+            .setPositiveButton("Abrir") { _, _ ->
+                val id = et.text.toString().trim()
+                toast("Procurando lugar...")
+                Thread {
+                    var info: RobloxApi.PlaceInfo? = null
+                    var err = ""
+                    try {
+                        info = RobloxApi.placeInfo(id)
+                        if (info == null) err = "Lugar não encontrado"
+                    } catch (e: Exception) {
+                        err = "Não consegui achar esse lugar (" + (e.message ?: "erro") + ")"
+                    }
+                    val found = info
+                    runOnUiThread {
+                        if (found != null) openCloudPlace(found) else toast(err)
+                    }
+                }.start()
             }
             .setNegativeButton("Cancelar", null)
             .show()
+    }
+
+    // lugar da conta do Roblox: vira um projeto novo (Baseplate) com o nome e o ícone do lugar
+    internal fun openCloudPlace(p: RobloxApi.PlaceInfo) {
+        if (needStop()) return
+        val nm = Storage.cleanName(p.name)
+        if (Storage.exists(this, nm)) {
+            openSaved(nm)
+            return
+        }
+        Scene.applyTemplate("Baseplate")
+        History.clear()
+        lastSel = null
+        Editor.select(null)
+        try {
+            placeName = Storage.save(this, nm)
+            Storage.setCloud(this, nm, p.placeId, p.universeId)
+        } catch (e: Exception) {
+            placeName = null
+        }
+        menu.hide()
+        toast("Aberto: " + p.name + " (o conteúdo do Roblox ainda não é importado)")
     }
 }

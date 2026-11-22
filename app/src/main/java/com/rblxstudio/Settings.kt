@@ -15,6 +15,13 @@ object Settings {
     @Volatile var moveMode = MOVE_JOYSTICK
     @Volatile var firstPerson = false
 
+    // qualidade gráfica (igual ao Roblox): automático ou manual de 1 a 10
+    @Volatile var qualityAuto = true
+    @Volatile var quality = 7
+
+    // nível que o Renderer usa de verdade (automático = 7)
+    fun level(): Int = if (qualityAuto) 7 else quality.coerceIn(1, 10)
+
     private const val PREFS = "game_settings"
 
     fun load(c: Context) {
@@ -23,6 +30,8 @@ object Settings {
         camMode = p.getInt("camMode", CAM_CLASSIC)
         moveMode = p.getInt("moveMode", MOVE_JOYSTICK)
         firstPerson = p.getBoolean("firstPerson", false)
+        qualityAuto = p.getBoolean("qualityAuto", true)
+        quality = p.getInt("quality", 7).coerceIn(1, 10)
     }
 
     fun save(c: Context) {
@@ -31,6 +40,8 @@ object Settings {
             .putInt("camMode", camMode)
             .putInt("moveMode", moveMode)
             .putBoolean("firstPerson", firstPerson)
+            .putBoolean("qualityAuto", qualityAuto)
+            .putInt("quality", quality)
             .apply()
     }
 }
