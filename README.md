@@ -11,6 +11,12 @@ Versão do Roblox Studio para celular (Android), feita em Kotlin + OpenGL ES.
 - Ícones vetoriais no lugar dos emojis e ícone do app (logo do Roblox Studio)
 - **Login com conta do Roblox** (OAuth 2.0 + PKCE)
 
+## Novidades da v0.15
+- **Exportar**: File > Exportar lugar... (`.rbxl` binário ou `.rbxlx` XML) e Exportar modelo... (`.rbxm` ou `.rbxmx`). Modelo exporta o objeto selecionado; sem seleção, tudo do Workspace dentro de um Model. Vão peças (posição, rotação, tamanho, cor, Anchored, CanCollide, Transparency, MeshId/TextureID), scripts, Sounds, GUIs, Values, Tools e os serviços (StarterGui, ReplicatedStorage etc.). Itens sem equivalente (IntValue, ObjectValue) ficam de fora e o app avisa quantos.
+- **Publicar no Roblox**: File > Publicar lugar no Roblox envia o lugar inteiro (XML) para um lugar que já existe na sua conta, pela Open Cloud (Place Publishing). Precisa de uma chave de API com a permissão `universe-places` (Write), o jogo na lista da chave e IP `0.0.0.0/0`. Dá para "Publicar" ou só "Salvar versão".
+- **Enviar modelo ao Roblox**: File > Enviar modelo ao Roblox cria um asset Model na sua conta (chave com a permissão `assets` Write, e login feito no app).
+- A chave de API fica guardada só no aparelho (pasta privada do app).
+
 ## Novidades da v0.14
 - **Abrir mapas do Roblox**: Open File... agora lê `.rbxl` / `.rbxlx` (lugar inteiro) e `.rbxm` / `.rbxmx` (modelo, que é somado ao que já está aberto). Também aceita os nomes `.rblx` e `.rblxm`. Vêm as peças (posição, tamanho, rotação, cor, Anchored, CanCollide), scripts, Sounds, GUIs, Values e Tools. Modelos e pastas do Workspace viram peças soltas.
 - **Open by Place ID / My Games** tentam baixar o mapa de verdade (funciona para lugares seus ou "copy unlocked", com o login feito). Se o Roblox negar, abre um Baseplate e avisa o motivo.
@@ -21,6 +27,7 @@ Versão do Roblox Studio para celular (Android), feita em Kotlin + OpenGL ES.
 - Limites do importador: terreno, Union/MeshPart como caixas, formas (Ball/Cylinder) viram blocos, arquivos com compressão ZSTD ainda não abrem, máximo de 30000 peças.
 
 ## Roadmap
+- [x] v0.15: exportar .rbxl/.rbxm e publicar no Roblox (Open Cloud)
 - [x] v0.14: importar .rbxl/.rbxm, mapas por Place ID, R6/R15, animações base e pulo
 - [ ] Animações customizadas (KeyframeSequence / AnimationId, `Humanoid:LoadAnimation`) e mais animações R6/R15
 - [ ] Malhas versão 6/7 (Draco) para todos os acessórios; roupas em camadas

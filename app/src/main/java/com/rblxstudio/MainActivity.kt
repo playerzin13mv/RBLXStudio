@@ -137,6 +137,8 @@ class MainActivity : Activity() {
     private var lastSel: PartData? = null
     private var currentTab = "HOME"
     private var placeName: String? = null
+    private var exportModel = false
+    private var exportBinary = true
 
     // toque no editor
     private var mode = 0
@@ -878,15 +880,73 @@ class MainActivity : Activity() {
     // ---------- menu File ----------
     private fun fileMenu() {
         StyledDialog(this).setTitle("File")
-            .setItems(arrayOf("Novo lugar", "Abrir...", "Salvar", "Salvar como...", "Publicar no Roblox")) { _, i ->
+            .setItems(arrayOf(
+                "Novo lugar", "Abrir...", "Salvar", "Salvar como...",
+                "Exportar lugar...", "Exportar modelo...",
+                "Publicar lugar no Roblox", "Enviar modelo ao Roblox"
+            )) { _, i ->
                 when (i) {
                     0 -> newPlace()
                     1 -> openPlace()
                     2 -> savePlace(false)
                     3 -> savePlace(true)
-                    else -> publish()
+                    4 -> exportMenu(false)
+                    5 -> exportMenu(true)
+                    6 -> publish()
+                    else -> uploadModelDialog()
                 }
             }.show()
+    }
+
+    // ---------- exportar .rbxl / .rbxm ----------
+    private fun exportMenu(model: Boolean) {
+        if (needStop()) return
+        val opts = if (model) arrayOf(".rbxm (binário)", ".rbxmx (XML)") else arrayOf(".rbxl (binário)", ".rbxlx (XML)")
+        val msg = if (!model) "Exporta o lugar inteiro (Workspace e serviços)."
+        else if (RbxExport.usedSelection()) "Exporta o objeto selecionado."
+        else "Nada selecionado: exporta tudo do Workspace dentro de um Model."
+        StyledDialog(this).setTitle(if (model) "Exportar modelo" else "Exportar lugar")
+            .setMessage(msg)
+            .setItems(opts) { _, i -> startExport(model, i == 0) }
+            .show()
+    }
+
+    private fun startExport(model: Boolean, binary: Boolean) {
+        exportModel = model
+        exportBinary = binary
+        val base = Storage.cleanName(placeName ?: (if (model) "Model" else "Place"))
+        val ext = if (model) (if (binary) ".rbxm" else ".rbxmx") else (if (binary) ".rbxl" else ".rbxlx")
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "application/octet-stream"
+        i.putExtra(Intent.EXTRA_TITLE, base + ext)
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(i, 79)
+        } catch (e: Exception) {
+            toast("Não achei o seletor de arquivos")
+        }
+    }
+
+    private fun finishExport(u: Uri) {
+        val roots = if (exportModel) RbxExport.model(placeName ?: "Model") else RbxExport.place()
+        val skippedN = RbxExport.skipped
+        val binary = exportBinary
+        val total = RbxWriter.count(roots)
+        toast("Exportando...")
+        Thread {
+            var msg = ""
+            try {
+                val bytes = RbxWriter.write(roots, binary)
+                val os = contentResolver.openOutputStream(u, "wt") ?: throw Exception("não consegui abrir o arquivo")
+                os.use { it.write(bytes) }
+                msg = "Exportado: " + total + " objeto(s), " + (bytes.size / 1024) + " KB" +
+                    (if (skippedN > 0) " (" + skippedN + " item(ns) sem suporte ficaram de fora)" else "")
+            } catch (e: Throwable) {
+                msg = "Falha ao exportar: " + (e.message ?: e.javaClass.simpleName)
+            }
+            runOnUiThread { toast(msg) }
+        }.start()
     }
 
     internal fun needStop(): Boolean {
@@ -951,6 +1011,11 @@ class MainActivity : Activity() {
         if (requestCode == 78 && resultCode == RESULT_OK) {
             val u = data?.data
             if (u != null) openFileUri(u)
+            return
+        }
+        if (requestCode == 79) {
+            val u = data?.data
+            if (resultCode == RESULT_OK && u != null) finishExport(u)
             return
         }
         if (requestCode != 77 || resultCode != RESULT_OK) return
@@ -1050,13 +1115,117 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun fieldBox(vararg fields: EditText): LinearLayout {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        for ((idx, f) in fields.withIndex()) {
+            val l = lp(MATCH, WRAP)
+            if (idx > 0) l.topMargin = dp(8)
+            box.addView(f, l)
+        }
+        return box
+    }
+
+    private fun showResult(title: String, msg: String) {
+        runOnUiThread { StyledDialog(this).setTitle(title).setMessage(msg).setPositiveButton("OK", null).show() }
+    }
+
     private fun publish() {
+        if (needStop()) return
+        val cloud = placeName?.let { Storage.cloud(this, Storage.cleanName(it)) }
+        val pid = cloud?.get(0) ?: Publish.placeId(this)
+        val uid = cloud?.get(1) ?: Publish.universeId(this)
+        val etKey = styledEdit("Chave de API (Open Cloud)", Publish.apiKey(this), true)
+        val etPlace = styledEdit("Place ID do lugar que vai receber", if (pid > 0L) pid.toString() else "", false)
+        val etUni = styledEdit("Universe ID (vazio = achar sozinho)", if (uid > 0L) uid.toString() else "", false)
+        etPlace.inputType = InputType.TYPE_CLASS_NUMBER
+        etUni.inputType = InputType.TYPE_CLASS_NUMBER
+        StyledDialog(this).setTitle("Publicar no Roblox")
+            .setMessage("Atualiza um lugar que já existe na sua conta (a API do Roblox não cria jogos novos). " +
+                "Crie a chave em create.roblox.com > Credentials com a permissão universe-places (Write), o jogo na lista e o IP 0.0.0.0/0.")
+            .setView(fieldBox(etKey, etPlace, etUni))
+            .setPositiveButton("Publicar") { _, _ ->
+                doPublish(etKey.text.toString(), etPlace.text.toString(), etUni.text.toString(), true)
+            }
+            .setNeutralButton("Só salvar versão") { _, _ ->
+                doPublish(etKey.text.toString(), etPlace.text.toString(), etUni.text.toString(), false)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun doPublish(key: String, placeText: String, uniText: String, published: Boolean) {
+        val pid = placeText.trim().toLongOrNull()
+        if (key.isBlank() || pid == null) {
+            toast("Preencha a chave de API e o Place ID")
+            return
+        }
+        val uniIn = uniText.trim().toLongOrNull() ?: 0L
+        Publish.save(this, key, pid, uniIn)
+        val roots = RbxExport.place()
+        val total = RbxWriter.count(roots)
+        toast("Publicando...")
+        Thread {
+            var title = "Publicado"
+            var msg = ""
+            try {
+                val uni = if (uniIn > 0L) uniIn else Publish.universeOf(pid)
+                if (uni == 0L) throw Exception("não achei o jogo desse Place ID; preencha o Universe ID")
+                val bytes = RbxWriter.write(roots, false)
+                val v = Publish.publishPlace(key, uni, pid, bytes, false, published)
+                msg = (if (published) "Publicado" else "Versão salva") + (if (v > 0L) " (versão " + v + ")" else "") +
+                    ": " + total + " objeto(s), " + (bytes.size / 1024) + " KB."
+            } catch (e: Throwable) {
+                title = "Não publicou"
+                msg = e.message ?: e.javaClass.simpleName
+            }
+            showResult(title, msg)
+        }.start()
+    }
+
+    private fun uploadModelDialog() {
+        if (needStop()) return
         if (!RobloxAuth.loggedIn(this)) {
             toast("Entre com sua conta do Roblox primeiro")
             loginDialog()
-        } else {
-            toast("Publicar no Roblox: próxima etapa")
+            return
         }
+        val etKey = styledEdit("Chave de API (Open Cloud)", Publish.apiKey(this), true)
+        val etName = styledEdit("Nome do modelo", placeName ?: "MeuModelo", false)
+        val what = if (RbxExport.usedSelection()) "Vai enviar o objeto selecionado." else "Nada selecionado: vai enviar tudo do Workspace."
+        StyledDialog(this).setTitle("Enviar modelo ao Roblox")
+            .setMessage("Envia como Model para a sua conta (a chave precisa da permissão assets Write). " + what +
+                " O Roblox pode recusar arquivos feitos fora do Studio e o modelo passa por moderação.")
+            .setView(fieldBox(etKey, etName))
+            .setPositiveButton("Enviar") { _, _ -> doUploadModel(etKey.text.toString(), etName.text.toString()) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun doUploadModel(key: String, name: String) {
+        if (key.isBlank()) {
+            toast("Preencha a chave de API")
+            return
+        }
+        Publish.saveKey(this, key)
+        val nm = name.trim().ifEmpty { "MeuModelo" }
+        val roots = RbxExport.model(nm)
+        val total = RbxWriter.count(roots)
+        val user = RobloxAuth.userId(this)
+        toast("Enviando...")
+        Thread {
+            var title = "Modelo enviado"
+            var msg = ""
+            try {
+                val bytes = RbxWriter.write(roots, false)
+                val id = Publish.uploadModel(key, user, nm, bytes)
+                msg = "Asset ID: " + id + " (" + total + " objeto(s)). Veja em create.roblox.com > Creations > Models."
+            } catch (e: Throwable) {
+                title = "Não enviou"
+                msg = e.message ?: e.javaClass.simpleName
+            }
+            showResult(title, msg)
+        }.start()
     }
 
     // ---------- inserir objetos ----------
