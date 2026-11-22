@@ -210,7 +210,7 @@ class GameGui(private val act: Activity) : FrameLayout(act) {
 
         val btns = LinearLayout(act)
         btns.orientation = LinearLayout.HORIZONTAL
-        val menu = roundBtn(R.drawable.ic_roblox, Color.WHITE)
+        val menu = roundBtn(R.drawable.ic_roblox, null)
         menu.setOnClickListener { onMenu?.invoke() }
         btns.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
         val chatBtn = roundBtn(R.drawable.ic_chat, Color.WHITE)
@@ -292,7 +292,7 @@ class GameGui(private val act: Activity) : FrameLayout(act) {
     }
 
     fun say(msg: String) {
-        bubble.text = msg
+        bubble.text = ChatFilter.clean(msg)
         bubble.alpha = 0f
         bubble.visibility = View.VISIBLE
         bubbleUntil = android.os.SystemClock.uptimeMillis() + 4000L + 60L * msg.length.coerceAtMost(100)
@@ -327,7 +327,7 @@ class GameGui(private val act: Activity) : FrameLayout(act) {
 
     fun addChat(name: String, msg: String) {
         post {
-            chatLines.add("[" + name + "]: " + msg)
+            chatLines.add("[" + name + "]: " + ChatFilter.clean(msg))
             chatLog.text = chatLines.takeLast(30).joinToString("\n")
             chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
         }

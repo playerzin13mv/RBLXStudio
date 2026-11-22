@@ -9,6 +9,13 @@ Versão do Roblox Studio para celular (Android), feita em Kotlin + OpenGL ES.
 - Ícones vetoriais no lugar dos emojis e ícone do app (logo do Roblox Studio)
 - **Login com conta do Roblox** (OAuth 2.0 + PKCE)
 
+## Novidades da v0.12
+- Menu do jogo no estilo antigo do Roblox: abas People, Settings, Report, Help e Record; botões Leave, Reset Character e Resume embaixo.
+- Ícone do botão de menu refeito (o PNG antigo era um quadrado branco).
+- Filtro de palavrão no chat: a palavra vira ##### (português e inglês, aceita acento, letras repetidas e números no lugar de letras).
+- Acessórios: o encaixe agora vem do Attachment do próprio item (posição e rotação certas) e a textura é escolhida pelo TextureID / ColorMap. Malhas versão 5 e malhas com ossos são lidas. Plano B 3D tenta o endereço novo sem cookie e depois o antigo.
+- O relatório do avatar mostra o ponto de encaixe usado em cada acessório.
+
 ## Novidades da v0.10
 - Morte estilo Roblox: as 6 peças se soltam, mantêm a velocidade do personagem, caem pela gravidade, tombam e deitam no chão (sem explosão). Cair no void só renasce.
 - Todos os menus do Editor (login, inserir objeto, File, cor, salvar...) com visual novo no estilo do Editor; ícones coloridos no Explorer e no menu de inserir.

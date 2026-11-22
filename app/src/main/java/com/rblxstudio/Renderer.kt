@@ -443,8 +443,23 @@ class Renderer : GLSurfaceView.Renderer {
         GLES20.glEnableVertexAttribArray(aT)
     }
 
+    private val pm3 = FloatArray(16)
+
     private fun drawAccessory(g: AccGl) {
         val a = g.acc
+        val inv = a.attInv
+        val pl = a.place
+        if (inv != null && pl != null) {
+            // encaixe pelo Attachment do próprio item: corpo -> ponto do Roblox -> inverso do Attachment do Handle
+            if (!partMatrix(pl[0].toInt(), pm)) return
+            Matrix.rotateM(pm, 0, 180f, 0f, 1f, 0f)   // o Roblox olha para -Z; aqui o avatar olha para +Z
+            Matrix.translateM(pm, 0, pl[1], pl[2], pl[3])
+            Matrix.multiplyMM(pm3, 0, pm, 0, inv, 0)
+            useMesh(g.buf)
+            GLES20.glUniformMatrix4fv(uModel, 1, false, pm3, 0)
+            drawAccBody(g)
+            return
+        }
         val head = a.type == "Hat" || a.type == "Hair" || a.type == "Face"
         val anchor = if (head) 1 else 0
         if (!partMatrix(anchor, pm)) return
@@ -472,6 +487,10 @@ class Renderer : GLSurfaceView.Renderer {
             -(a.min[0] + a.max[0]) / 2f, -(a.min[1] + a.max[1]) / 2f, -(a.min[2] + a.max[2]) / 2f)
         useMesh(g.buf)
         GLES20.glUniformMatrix4fv(uModel, 1, false, pm, 0)
+        drawAccBody(g)
+    }
+
+    private fun drawAccBody(g: AccGl) {
         if (g.tex != 0) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, g.tex)

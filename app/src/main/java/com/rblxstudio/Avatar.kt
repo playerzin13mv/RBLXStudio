@@ -19,7 +19,12 @@ class Acc(
     val min: FloatArray,
     val max: FloatArray,
     var tex: Bitmap?
-)
+) {
+    // encaixe vindo do arquivo do item: matriz inversa do Attachment do Handle (4x4, coluna) e onde ele fica no corpo
+    var attInv: FloatArray? = null
+    var place: FloatArray? = null   // [0]=0 torso/1 cabeça, [1..3]=ponto no corpo (eixos do Roblox)
+    var attName: String = ""
+}
 
 // Avatar do jogador logado: cores do corpo, roupas 2D clássicas e acessórios 3D
 object Avatar {
@@ -204,7 +209,7 @@ object Avatar {
                                 accList.add(acc)
                                 accs = ArrayList(accList)
                                 version++
-                                lines.add(tag + kind + " OK" + (if (acc.tex == null) " (sem textura)" else ""))
+                                lines.add(tag + kind + " OK" + (if (acc.attName.isNotEmpty()) " [" + acc.attName + "]" else " (sem encaixe)") + (if (acc.tex == null) " (sem textura)" else ""))
                             } else {
                                 lines.add(tag + "falhou")
                             }
@@ -221,7 +226,7 @@ object Avatar {
     }
 
     // ---------- download ----------
-    private fun bytes(u: String): ByteArray {
+    private fun bytes(u: String, useCookie: Boolean = true): ByteArray {
         var url = u
         for (hop in 0..4) {
             val c = URL(url).openConnection() as HttpURLConnection
@@ -231,7 +236,7 @@ object Avatar {
             c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) RBLXStudio/0.8")
             val ck = RobloxAuth.cookie
             val host = URL(url).host ?: ""
-            if (ck.isNotEmpty() && host.endsWith(".roblox.com")) c.setRequestProperty("Cookie", ".ROBLOSECURITY=" + ck)
+            if (useCookie && ck.isNotEmpty() && host.endsWith(".roblox.com")) c.setRequestProperty("Cookie", ".ROBLOSECURITY=" + ck)
             try {
                 val code = c.responseCode
                 if (code in 300..399) {
@@ -340,29 +345,200 @@ object Avatar {
         return null
     }
 
+    // id de asset dentro de um texto ("rbxassetid://123", "http://www.roblox.com/asset/?id=123" ou só número)
+    private fun idIn(t: String): Long {
+        if (t.isEmpty()) return 0L
+        val m = Regex("(?:[iI][dD]=|rbxassetid://)(\\d{3,})").find(t)
+        if (m != null) return m.groupValues[1].toLongOrNull() ?: 0L
+        val only = t.trim()
+        if (only.length >= 3 && only.all { it.isDigit() }) return only.toLongOrNull() ?: 0L
+        return 0L
+    }
+
+    // imagem por ID (também funciona quando o ID é um "Decal", que aponta para outra imagem)
+    private fun imageById(id: Long): Bitmap? {
+        val raw = asset(id)
+        val direct = decodeBmp(raw)
+        if (direct != null) return direct
+        for (r in refs(raw)) {
+            val b = try { asset(r) } catch (e: Exception) { continue }
+            val bmp = decodeBmp(b)
+            if (bmp != null) return bmp
+        }
+        return null
+    }
+
+    private val attNames = mapOf(
+        "Hat" to listOf("HatAttachment"),
+        "Hair" to listOf("HairAttachment", "HatAttachment"),
+        "Face" to listOf("FaceFrontAttachment", "FaceCenterAttachment"),
+        "Neck" to listOf("NeckAttachment"),
+        "Shoulder" to listOf("LeftShoulderAttachment", "RightShoulderAttachment", "LeftCollarAttachment", "RightCollarAttachment"),
+        "Front" to listOf("BodyFrontAttachment"),
+        "Back" to listOf("BodyBackAttachment"),
+        "Waist" to listOf("WaistFrontAttachment", "WaistBackAttachment", "WaistCenterAttachment")
+    )
+
+    // onde cada Attachment fica no corpo (eixos do Roblox: frente = -Z). 0 = torso (2x2x1), 1 = cabeça (cubo 1,2)
+    private fun bodyPoint(att: String): FloatArray? = when (att) {
+        "HatAttachment", "HairAttachment" -> floatArrayOf(1f, 0f, 0.6f, 0f)
+        "FaceFrontAttachment" -> floatArrayOf(1f, 0f, 0f, -0.6f)
+        "FaceCenterAttachment" -> floatArrayOf(1f, 0f, 0f, 0f)
+        "NeckAttachment" -> floatArrayOf(0f, 0f, 1.0f, 0f)
+        "LeftShoulderAttachment" -> floatArrayOf(0f, -1.0f, 0.8f, 0f)
+        "RightShoulderAttachment" -> floatArrayOf(0f, 1.0f, 0.8f, 0f)
+        "LeftCollarAttachment" -> floatArrayOf(0f, -0.9f, 1.0f, 0f)
+        "RightCollarAttachment" -> floatArrayOf(0f, 0.9f, 1.0f, 0f)
+        "BodyFrontAttachment" -> floatArrayOf(0f, 0f, 0.4f, -0.5f)
+        "BodyBackAttachment" -> floatArrayOf(0f, 0f, 0.4f, 0.5f)
+        "WaistFrontAttachment" -> floatArrayOf(0f, 0f, -0.8f, -0.5f)
+        "WaistBackAttachment" -> floatArrayOf(0f, 0f, -0.8f, 0.5f)
+        "WaistCenterAttachment" -> floatArrayOf(0f, 0f, -0.8f, 0f)
+        else -> null
+    }
+
+    // matriz 4x4 (coluna) inversa de um CFrame do Roblox
+    private fun invCf(c: FloatArray): FloatArray {
+        // c: x y z r00 r01 r02 r10 r11 r12 r20 r21 r22  (linhas da rotação)
+        val r = floatArrayOf(c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11])
+        // inversa da rotação = transposta (índice em coluna: col*4+row)
+        val m = FloatArray(16)
+        m[0] = r[0]; m[1] = r[1]; m[2] = r[2]
+        m[4] = r[3]; m[5] = r[4]; m[6] = r[5]
+        m[8] = r[6]; m[9] = r[7]; m[10] = r[8]
+        val tx = c[0]; val ty = c[1]; val tz = c[2]
+        m[12] = -(m[0] * tx + m[4] * ty + m[8] * tz)
+        m[13] = -(m[1] * tx + m[5] * ty + m[9] * tz)
+        m[14] = -(m[2] * tx + m[6] * ty + m[10] * tz)
+        m[3] = 0f; m[7] = 0f; m[11] = 0f; m[15] = 1f
+        return m
+    }
+
+    private fun bake(m: Mesh, sx: Float, sy: Float, sz: Float, ox: Float, oy: Float, oz: Float): Mesh {
+        val d = m.data
+        var i = 0
+        while (i + 8 <= d.size) {
+            d[i] = d[i] * sx + ox
+            d[i + 1] = d[i + 1] * sy + oy
+            d[i + 2] = d[i + 2] * sz + oz
+            i += 8
+        }
+        return finish(d)
+    }
+
     private fun loadAccessoryMesh(itemId: Long, name: String, kind: String): Acc? {
         val raw = asset(itemId)
-        val ids = refs(raw)
+        var meshId = 0L
+        var texId = 0L
+        var handle: RNode? = null
+        var special: RNode? = null
+        val tree = RbxFile.parse(raw)
+        if (tree != null) {
+            val all = ArrayList<RNode>()
+            for (t in tree) t.all(all)
+            handle = all.firstOrNull { it.name == "Handle" && (it.cls == "MeshPart" || it.cls == "Part") }
+                ?: all.firstOrNull { it.cls == "MeshPart" }
+            val h = handle
+            if (h != null) {
+                special = h.kids.firstOrNull { it.cls == "SpecialMesh" }
+                meshId = idIn(h.text("MeshId", "MeshID"))
+                if (meshId == 0L && special != null) meshId = idIn(special.text("MeshId", "MeshID"))
+                texId = idIn(h.text("TextureID", "TextureId"))
+                if (texId == 0L && special != null) texId = idIn(special.text("TextureId", "TextureID"))
+                if (texId == 0L) {
+                    val sa = h.kids.firstOrNull { it.cls == "SurfaceAppearance" }
+                    if (sa != null) texId = idIn(sa.text("ColorMap"))
+                }
+            }
+        }
         var mesh: Mesh? = null
         var tex: Bitmap? = null
         var meshVer = ""
-        for (r in ids) {
-            val b = try { asset(r) } catch (e: Exception) { continue }
-            if (mesh == null && b.size > 12 && String(b, 0, 8, Charsets.ISO_8859_1).startsWith("version ")) {
+        if (meshId != 0L) {
+            val b = asset(meshId)
+            if (b.size > 12 && String(b, 0, 8, Charsets.ISO_8859_1).startsWith("version ")) {
                 mesh = parseMesh(b)
                 if (mesh == null) meshVer = String(b, 0, 12, Charsets.ISO_8859_1).trim()
-                continue
-            }
-            if (tex == null) {
-                val bmp = decodeBmp(b)
-                if (bmp != null) tex = bmp
             }
         }
-        val m = mesh ?: run {
+        if (texId != 0L) {
+            try { tex = imageById(texId) } catch (e: Exception) { tex = null }
+        }
+        // não achei pelo arquivo: procura por qualquer ID dentro do item (como antes), sem pegar mapas de normal/metal
+        if (mesh == null && meshVer.isEmpty()) {
+            for (r in refs(raw)) {
+                if (r == meshId || r == texId) continue
+                val b = try { asset(r) } catch (e: Exception) { continue }
+                if (mesh == null && b.size > 12 && String(b, 0, 8, Charsets.ISO_8859_1).startsWith("version ")) {
+                    mesh = parseMesh(b)
+                    if (mesh == null) meshVer = String(b, 0, 12, Charsets.ISO_8859_1).trim()
+                    continue
+                }
+                if (tex == null) {
+                    val bmp = decodeBmp(b)
+                    if (bmp != null) tex = bmp
+                }
+            }
+        }
+        if (tex == null && texId == 0L) {
+            // textura só por varredura (item sem TextureID legível)
+            for (r in refs(raw)) {
+                if (r == meshId) continue
+                val b = try { asset(r) } catch (e: Exception) { continue }
+                if (b.size > 12 && String(b, 0, 8, Charsets.ISO_8859_1).startsWith("version ")) continue
+                val bmp = decodeBmp(b)
+                if (bmp != null) { tex = bmp; break }
+            }
+        }
+        var m = mesh ?: run {
             lastErr = name + ": malha " + (if (meshVer.isEmpty()) "não encontrada" else meshVer + " não suportada")
             return null
         }
-        return Acc(name, kind, m.data, m.min, m.max, tex)
+        // escala/deslocamento do Handle
+        val sp = special
+        val hd = handle
+        if (sp != null) {
+            val sc = sp.vec["Scale"] ?: floatArrayOf(1f, 1f, 1f)
+            val of = sp.vec["Offset"] ?: floatArrayOf(0f, 0f, 0f)
+            if (sc[0] != 1f || sc[1] != 1f || sc[2] != 1f || of[0] != 0f || of[1] != 0f || of[2] != 0f) {
+                m = bake(m, sc[0], sc[1], sc[2], of[0], of[1], of[2])
+            }
+        } else if (hd != null && hd.cls == "MeshPart") {
+            val sz = hd.vec["Size"]
+            if (sz != null) {
+                val bw = m.max[0] - m.min[0]
+                val bh = m.max[1] - m.min[1]
+                val bd = m.max[2] - m.min[2]
+                if (bw > 1e-4f && bh > 1e-4f && bd > 1e-4f) {
+                    val rx = sz[0] / bw
+                    val ry = sz[1] / bh
+                    val rz = sz[2] / bd
+                    val ok = rx in 0.02f..50f && ry in 0.02f..50f && rz in 0.02f..50f
+                    val same = Math.abs(rx - 1f) < 0.02f && Math.abs(ry - 1f) < 0.02f && Math.abs(rz - 1f) < 0.02f
+                    if (ok && !same) m = bake(m, rx, ry, rz, 0f, 0f, 0f)
+                }
+            }
+        }
+        val acc = Acc(name, kind, m.data, m.min, m.max, tex)
+        // ponto de encaixe (Attachment dentro do Handle)
+        if (hd != null && kind != "Head") {
+            val atts = hd.kids.filter { it.cls == "Attachment" && it.cf.containsKey("CFrame") }
+            var pick: RNode? = null
+            val want = attNames[kind] ?: emptyList()
+            for (w in want) {
+                pick = atts.firstOrNull { it.name == w }
+                if (pick != null) break
+            }
+            if (pick == null) pick = atts.firstOrNull { bodyPoint(it.name) != null }
+            val bp = if (pick != null) bodyPoint(pick.name) else null
+            val cfv = pick?.cf?.get("CFrame")
+            if (pick != null && bp != null && cfv != null) {
+                acc.attInv = invCf(cfv)
+                acc.place = bp
+                acc.attName = pick.name
+            }
+        }
+        return acc
     }
 
     // ---------- plano B: miniatura 3D do Roblox (OBJ + textura), sem login e sem formato de malha ----------
@@ -374,24 +550,51 @@ object Avatar {
 
     private fun loadAccessory3d(itemId: Long, name: String, kind: String): Acc? {
         var imageUrl = ""
+        var last: Exception? = null
+        // 1) API nova (sem cookie primeiro: com cookie vencido ela devolve 403)
         for (k in 0 until 8) {
-            val j = JSONObject(String(bytes("https://thumbnails.roblox.com/v1/assets-thumbnail-3d?assetId=" + itemId), Charsets.UTF_8))
-            val st = j.optString("state")
-            if (st == "Completed") {
-                imageUrl = j.optString("imageUrl")
+            var st = ""
+            try {
+                val j = JSONObject(String(bytes("https://thumbnails.roblox.com/v1/assets-thumbnail-3d?assetId=" + itemId, false), Charsets.UTF_8))
+                st = j.optString("state")
+                if (st == "Completed") {
+                    imageUrl = j.optString("imageUrl")
+                    break
+                }
+            } catch (e: Exception) {
+                last = e
                 break
             }
             if (st == "Error" || st == "Blocked") break
             Thread.sleep(1500)
         }
-        if (imageUrl.isEmpty()) return null
-        val info = JSONObject(String(bytes(imageUrl), Charsets.UTF_8))
-        val obj = String(bytes(cdn(info.getString("obj"))), Charsets.UTF_8)
+        // 2) endereço antigo do site
+        if (imageUrl.isEmpty()) {
+            try {
+                for (k in 0 until 6) {
+                    val j = JSONObject(String(bytes("https://www.roblox.com/asset-thumbnail-3d/json?assetId=" + itemId, false), Charsets.UTF_8))
+                    val u = j.optString("Url", "")
+                    if (u.isNotEmpty() && j.optBoolean("Final", true)) {
+                        imageUrl = u
+                        break
+                    }
+                    Thread.sleep(1500)
+                }
+            } catch (e: Exception) {
+                if (last == null) last = e
+            }
+        }
+        if (imageUrl.isEmpty()) {
+            if (last != null) throw last
+            return null
+        }
+        val info = JSONObject(String(bytes(imageUrl, false), Charsets.UTF_8))
+        val obj = String(bytes(cdn(info.getString("obj")), false), Charsets.UTF_8)
         var tex: Bitmap? = null
         val texs = info.optJSONArray("textures")
         if (texs != null && texs.length() > 0) {
             try {
-                tex = decodeBmp(bytes(cdn(texs.getString(0))))
+                tex = decodeBmp(bytes(cdn(texs.getString(0)), false))
             } catch (e: Exception) {
                 tex = null
             }
@@ -553,8 +756,8 @@ object Avatar {
         return try {
             when {
                 head.startsWith("version 1.") -> parseMeshV1(b)
-                head.startsWith("version 2.") || head.startsWith("version 3.") || head.startsWith("version 4.") ->
-                    parseMeshBin(b, head.substring(8, 9).toInt())
+                head.startsWith("version 2.") || head.startsWith("version 3.") || head.startsWith("version 4.") || head.startsWith("version 5.") ->
+                    parseMeshBin(b, minOf(head.substring(8, 9).toInt(), 4))
                 else -> null
             }
         } catch (e: Exception) {
@@ -573,12 +776,14 @@ object Avatar {
         var nVerts: Int
         var nFaces: Int
         var lodCount = 0
+        var bones = 0
         if (v4) {
             vSize = 40
             fSize = 12
             nVerts = bb.getInt(p + 4)
             nFaces = bb.getInt(p + 8)
             lodCount = bb.getShort(p + 12).toInt() and 0xffff
+            bones = bb.getShort(p + 14).toInt() and 0xffff
         } else if (v3) {
             vSize = bb.get(p + 2).toInt() and 255
             fSize = bb.get(p + 3).toInt() and 255
@@ -594,7 +799,8 @@ object Avatar {
         p += hdrSize
         if (nVerts <= 0 || nFaces <= 0 || vSize < 32 || fSize < 12) return null
         val vOff = p
-        val fOff = vOff + nVerts * vSize
+        // malhas com ossos têm 8 bytes de pesos por vértice entre os vértices e as faces
+        val fOff = vOff + nVerts * vSize + (if (bones > 0) nVerts * 8 else 0)
         // v3: só o nível de detalhe 0
         if ((v3 || v4) && lodCount >= 2) {
             val lodOff = fOff + nFaces * fSize
